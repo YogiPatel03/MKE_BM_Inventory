@@ -1,0 +1,53 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy-backend:
+    name: Deploy Backend (Render)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy
+        run: |
+          curl -s -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" \
+            -H "Content-Type: application/json"
+        # Set RENDER_DEPLOY_HOOK_URL in GitHub repo secrets
+        # Find it in Render dashboard → your service → Settings → Deploy hooks
+
+  # Frontend is deployed automatically by Vercel's GitHub integration.
+  # No CI step needed — Vercel watches main and deploys on push.
+  # If you prefer to deploy via GitHub Actions instead:
+  #
+  # deploy-frontend:
+  #   name: Deploy Frontend (Vercel)
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: amondnet/vercel-action@v25
+  #       with:
+  #         vercel-token: ${{ secrets.VERCEL_TOKEN }}
+  #         vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+  #         vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+  #         vercel-args: "--prod"
+  #         working-directory: frontend
+
+  backup-db:
+    name: Database backup
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'  # only run on schedule
+    steps:
+      - uses: actions/checkout@v4
+      - name: pg_dump to artifact
+        env:
+          DATABASE_URL_SYNC: ${{ secrets.DATABASE_URL_SYNC }}
+        run: |
+          sudo apt-get install -y postgresql-client
+          pg_dump "$DATABASE_URL_SYNC" --no-owner --no-privileges -Fc \
+            > backup-$(date +%Y%m%d).dump
+      - uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ github.run_number }}
+          path: "*.dump"
+          retention-days: 30

@@ -1,0 +1,130 @@
+"""
+Telegram service — sends notifications and manages bot state.
+
+All Telegram calls are fire-and-forget; failures are logged but never
+raise exceptions to callers. The bot's coordinator channel is the primary
+notification target; user DMs are used for overdue reminders when a
+telegram_chat_id is linked.
+"""
+
+import logging
+from typing import Optional
+
+from telegram import Bot
+from telegram.error import TelegramError
+
+from app.config import settings
+from app.models.transaction import Transaction
+
+log = logging.getLogger(__name__)
+
+_bot: Optional[Bot] = None
+
+
+def get_bot() -> Optional[Bot]:
+    global _bot
+    if not settings.telegram_enabled:
+        return None
+    if _bot is None:
+        _bot = Bot(token=settings.telegram_bot_token)
+    return _bot
+
+
+async def _send(chat_id: str, text: str) -> Optional[int]:
+    """Send a message; return message_id or None on failure."""
+    bot = get_bot()
+    if not bot or not chat_id:
+        return None
+    try:
+        msg = await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+        return msg.message_id
+    except TelegramError as e:
+        log.warning("Telegram send failed to %s: %s", chat_id, e)
+        return None
+
+
+async def notify_checkout(transaction: Transaction) -> None:
+    """Notify coordinator channel when an item is checked out."""
+    if not settings.telegram_coordinator_chat_id:
+        return
+
+    username = transaction.user.username
+    tg_handle = transaction.user.telegram_handle
+    user_display = f"@{tg_handle}" if tg_handle else username
+
+    item_name = transaction.item.name
+    due_str = (
+        transaction.due_at.strftime("%b %d, %Y") if transaction.due_at else "no due date"
+    )
+
+    text = (
+        f"📦 <b>Checkout</b> #{transaction.id}\n"
+        f"Item: <b>{item_name}</b> × {transaction.quantity}\n"
+        f"User: {user_display}\n"
+        f"Due: {due_str}"
+    )
+    await _send(settings.telegram_coordinator_chat_id, text)
+
+
+async def notify_return_and_request_photo(transaction: Transaction) -> Optional[str]:
+    """
+    Notify coordinator channel when an item is returned.
+    Returns the message_id of the sent notification so it can be stored on the
+    transaction — this allows the bot to match a photo reply back to the transaction.
+    """
+    if not settings.telegram_coordinator_chat_id:
+        return None
+
+    username = transaction.user.username
+    tg_handle = transaction.user.telegram_handle
+    user_display = f"@{tg_handle}" if tg_handle else username
+    item_name = transaction.item.name
+
+    text = (
+        f"✅ <b>Return logged</b> #{transaction.id}\n"
+        f"Item: <b>{item_name}</b> × {transaction.quantity}\n"
+        f"Returned by: {user_display}\n\n"
+        f"📷 No photo was attached. {user_display}, please reply to this message "
+        f"with a condition/return photo for the record."
+    )
+    message_id = await _send(settings.telegram_coordinator_chat_id, text)
+    return str(message_id) if message_id else None
+
+
+async def notify_overdue(transaction: Transaction) -> None:
+    """DM the user whose checkout is overdue, and notify the coordinator channel."""
+    username = transaction.user.username
+    tg_handle = transaction.user.telegram_handle
+    user_display = f"@{tg_handle}" if tg_handle else username
+    item_name = transaction.item.name
+    due_str = (
+        transaction.due_at.strftime("%b %d, %Y") if transaction.due_at else "unknown"
+    )
+
+    # DM the user
+    if transaction.user.telegram_chat_id:
+        dm_text = (
+            f"⚠️ <b>Overdue item reminder</b>\n"
+            f"You have an overdue checkout: <b>{item_name}</b> × {transaction.quantity}\n"
+            f"Was due: {due_str}\n"
+            f"Please return it as soon as possible."
+        )
+        await _send(transaction.user.telegram_chat_id, dm_text)
+
+    # Notify coordinator channel
+    if settings.telegram_coordinator_chat_id:
+        coord_text = (
+            f"⏰ <b>Overdue</b> #{transaction.id}\n"
+            f"Item: <b>{item_name}</b> × {transaction.quantity}\n"
+            f"User: {user_display}\n"
+            f"Due: {due_str}"
+        )
+        await _send(settings.telegram_coordinator_chat_id, coord_text)
+
+
+async def notify_account_linked(chat_id: str, full_name: str) -> None:
+    text = (
+        f"✅ Account linked successfully!\n"
+        f"Welcome, <b>{full_name}</b>. You'll now receive inventory notifications here."
+    )
+    await _send(chat_id, text)
