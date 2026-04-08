@@ -1,17 +1,15 @@
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { getItem } from "@/api/items";
 import { listTransactions } from "@/api/transactions";
-import { useAuthStore } from "@/store/auth";
 import { CheckoutModal } from "@/components/transactions/CheckoutModal";
 import { TransactionRow } from "@/components/transactions/TransactionRow";
 
 export function ItemDetailPage() {
   const { id } = useParams<{ id: string }>();
   const itemId = Number(id);
-  const user = useAuthStore((s) => s.user);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
 
   const { data: item, isLoading } = useQuery({

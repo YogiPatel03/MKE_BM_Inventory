@@ -11,7 +11,6 @@ async function generateLinkToken(): Promise<{ token: string; instructions: strin
 export function SettingsPage() {
   const user = useAuthStore((s) => s.user);
   const [token, setToken] = useState<string | null>(null);
-  const [instructions, setInstructions] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
@@ -22,7 +21,6 @@ export function SettingsPage() {
     try {
       const result = await generateLinkToken();
       setToken(result.token);
-      setInstructions(result.instructions);
     } catch {
       setError("Failed to generate token. Try again.");
     } finally {

@@ -69,7 +69,7 @@ export function CabinetDetailPage() {
   const [binModalOpen, setBinModalOpen] = useState(false);
   const [itemModalOpen, setItemModalOpen] = useState(false);
 
-  const { data: allItems = [], isLoading: itemsLoading } = useQuery({
+  const { data: allItems = [] } = useQuery({
     queryKey: ["items", "cabinet", cabinetId],
     queryFn: () => listItems({ cabinet_id: cabinetId }),
   });
