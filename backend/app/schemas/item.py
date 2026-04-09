@@ -14,6 +14,7 @@ class ItemBase(BaseModel):
     condition: str = "GOOD"
     is_consumable: bool = False
     unit_price: Optional[float] = None
+    low_stock_threshold: Optional[int] = None
 
 
 class ItemCreate(ItemBase):
@@ -35,6 +36,7 @@ class ItemUpdate(BaseModel):
     is_active: Optional[bool] = None
     is_consumable: Optional[bool] = None
     unit_price: Optional[float] = None
+    low_stock_threshold: Optional[int] = None
 
 
 class ItemOut(ItemBase):
@@ -44,5 +46,8 @@ class ItemOut(ItemBase):
     quantity_available: int
     is_active: bool
     qr_code_token: Optional[str] = None
+    low_stock_threshold: Optional[int] = None
+    prior_cabinet_id: Optional[int] = None
+    prior_bin_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime

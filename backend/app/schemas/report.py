@@ -48,10 +48,19 @@ class LowStockItem(BaseModel):
     bin_id: Optional[int] = None
     quantity_available: int
     quantity_total: int
+    low_stock_threshold: Optional[int] = None
+
+
+class OutOfStockItem(BaseModel):
+    item_id: int
+    item_name: str
+    cabinet_id: int
+    bin_id: Optional[int] = None
 
 
 class InventoryStatusReport(BaseModel):
     total_items: int
     low_stock_items: List[LowStockItem]
+    out_of_stock_items: List[OutOfStockItem]
     checked_out_count: int
     overdue_count: int

@@ -39,7 +39,9 @@ class Cabinet(Base):
     bins: Mapped[List["Bin"]] = relationship(
         "Bin", back_populates="cabinet", cascade="all, delete-orphan"
     )
-    items: Mapped[List["Item"]] = relationship("Item", back_populates="cabinet")
+    items: Mapped[List["Item"]] = relationship(
+        "Item", foreign_keys="Item.cabinet_id", back_populates="cabinet"
+    )
 
     def __repr__(self) -> str:
         return f"<Cabinet {self.name}>"

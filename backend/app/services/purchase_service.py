@@ -10,9 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
+from app.models.activity_log import ActivityType
 from app.models.item import Item
 from app.models.purchase_record import PurchaseRecord
 from app.models.receipt_record import ReceiptRecord
+from app.services.activity_service import log_activity
+from app.services.restock_service import restore_from_restock_if_nonzero
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +62,25 @@ async def log_purchase(
     db.add(purchase)
     await db.flush()
     await db.refresh(purchase)
+
+    cost_impact = total_price or (unit_price * quantity_purchased if unit_price else None)
+    await log_activity(
+        db,
+        activity_type=ActivityType.PURCHASE_LOGGED,
+        actor_id=purchased_by_user_id,
+        target_item_id=item_id,
+        target_cabinet_id=item.cabinet_id,
+        quantity_delta=+quantity_purchased,
+        cost_impact=cost_impact,
+        notes=notes,
+        metadata={"vendor": vendor, "unit_price": unit_price, "total_price": total_price},
+        source_type="purchase_record",
+        source_id=purchase.id,
+    )
+
+    # Restore from Restock Me if restocking brought stock > 0
+    await restore_from_restock_if_nonzero(db, item, actor_id=purchased_by_user_id)
+
     log.info("Purchase: purchase=%d item=%d qty=%d", purchase.id, item_id, quantity_purchased)
     return purchase
 

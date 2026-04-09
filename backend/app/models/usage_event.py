@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -34,6 +34,12 @@ class UsageEvent(Base):
 
     quantity_used: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Reversal support — a reversal is a compensating event that restores stock.
+    # Original events have is_reversal=False; reversals set is_reversal=True and
+    # point back to the original via reverses_event_id.
+    is_reversal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reverses_event_id: Mapped[Optional[int]] = mapped_column(ForeignKey("usage_events.id"), nullable=True)
 
     used_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

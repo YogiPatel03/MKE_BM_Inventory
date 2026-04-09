@@ -146,6 +146,33 @@ async def notify_new_request(request_id: int, requester_name: str, target_name: 
     return str(message_id) if message_id else None
 
 
+async def notify_low_stock(item_name: str, quantity_available: int, threshold: int, location: str) -> None:
+    """Alert coordinator channel when an item crosses into low-stock state."""
+    if not settings.telegram_coordinator_chat_id:
+        return
+    text = (
+        f"⚠️ <b>Low stock alert</b>\n"
+        f"Item: <b>{item_name}</b>\n"
+        f"Remaining: {quantity_available} (threshold: {threshold})\n"
+        f"Location: {location}\n\n"
+        f"Consider restocking soon."
+    )
+    await _send(settings.telegram_coordinator_chat_id, text)
+
+
+async def notify_out_of_stock(item_name: str, location: str) -> None:
+    """Alert coordinator channel when an item hits zero stock."""
+    if not settings.telegram_coordinator_chat_id:
+        return
+    text = (
+        f"🔴 <b>Out of stock</b>\n"
+        f"Item: <b>{item_name}</b>\n"
+        f"Location: {location}\n\n"
+        f"Item has been moved to Restock Me. Restock to restore."
+    )
+    await _send(settings.telegram_coordinator_chat_id, text)
+
+
 async def notify_purchase_and_request_receipt(
     purchase_id: int,
     item_name: str,

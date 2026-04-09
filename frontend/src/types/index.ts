@@ -73,6 +73,9 @@ export interface Item {
   isConsumable: boolean;
   unitPrice: number | null;
   qrCodeToken: string | null;
+  lowStockThreshold: number | null;
+  priorCabinetId: number | null;
+  priorBinId: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -141,7 +144,65 @@ export interface UsageEvent {
   processedByUserId: number | null;
   quantityUsed: number;
   notes: string | null;
+  isReversal: boolean;
+  reversesEventId: number | null;
   usedAt: string;
+  createdAt: string;
+}
+
+// ─── Activity Log ─────────────────────────────────────────────────────────────
+
+export type ActivityType =
+  | "ITEM_CREATED" | "ITEM_EDITED" | "ITEM_DEACTIVATED" | "ITEM_REACTIVATED"
+  | "CABINET_EDITED" | "USER_EDITED" | "USER_PASSWORD_RESET"
+  | "ITEM_CHECKED_OUT" | "ITEM_RETURNED" | "BIN_CHECKED_OUT" | "BIN_RETURNED"
+  | "USAGE_RECORDED" | "USAGE_REVERSED"
+  | "STOCK_ADJUSTMENT_INCREASE" | "STOCK_ADJUSTMENT_DECREASE"
+  | "PURCHASE_LOGGED" | "ITEM_MOVED" | "BIN_MOVED"
+  | "ITEM_MOVED_TO_RESTOCK" | "ITEM_RESTORED_FROM_RESTOCK"
+  | "REQUEST_FULFILLED";
+
+export interface ActivityActor {
+  id: number;
+  username: string;
+  fullName: string;
+}
+
+export interface ActivityItemRef {
+  id: number;
+  name: string;
+}
+
+export interface ActivityBinRef {
+  id: number;
+  label: string;
+}
+
+export interface ActivityCabinetRef {
+  id: number;
+  name: string;
+}
+
+export interface ActivityLog {
+  id: number;
+  activityType: ActivityType;
+  actorId: number | null;
+  actor: ActivityActor | null;
+  targetItemId: number | null;
+  targetItem: ActivityItemRef | null;
+  targetBinId: number | null;
+  targetBin: ActivityBinRef | null;
+  targetCabinetId: number | null;
+  targetCabinet: ActivityCabinetRef | null;
+  targetUserId: number | null;
+  targetUser: ActivityActor | null;
+  quantityDelta: number | null;
+  costImpact: number | null;
+  notes: string | null;
+  metadata: Record<string, unknown> | null;
+  sourceType: string | null;
+  sourceId: number | null;
+  occurredAt: string;
   createdAt: string;
 }
 

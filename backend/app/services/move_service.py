@@ -8,9 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
+from app.models.activity_log import ActivityType
 from app.models.bin import Bin
 from app.models.item import Item  # noqa: F401 — used in both move_item and cascade
 from app.models.location_change_log import LocationChangeLog
+from app.services.activity_service import log_activity
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +50,25 @@ async def move_item(
 
     await db.flush()
     await db.refresh(log_entry)
+
+    await log_activity(
+        db,
+        activity_type=ActivityType.ITEM_MOVED,
+        actor_id=moved_by_user_id,
+        target_item_id=item_id,
+        target_cabinet_id=to_cabinet_id,
+        target_bin_id=to_bin_id,
+        notes=notes,
+        metadata={
+            "from_cabinet_id": log_entry.from_cabinet_id,
+            "to_cabinet_id": to_cabinet_id,
+            "from_bin_id": log_entry.from_bin_id,
+            "to_bin_id": to_bin_id,
+        },
+        source_type="location_change_log",
+        source_id=log_entry.id,
+    )
+
     log.info("MoveItem: item=%d %s->%s", item_id, log_entry.from_cabinet_id, to_cabinet_id)
     return log_entry
 
@@ -86,6 +107,22 @@ async def move_bin(
 
     await db.flush()
     await db.refresh(log_entry)
+
+    await log_activity(
+        db,
+        activity_type=ActivityType.BIN_MOVED,
+        actor_id=moved_by_user_id,
+        target_bin_id=bin_id,
+        target_cabinet_id=to_cabinet_id,
+        notes=notes,
+        metadata={
+            "from_cabinet_id": log_entry.from_cabinet_id,
+            "to_cabinet_id": to_cabinet_id,
+        },
+        source_type="location_change_log",
+        source_id=log_entry.id,
+    )
+
     log.info(
         "MoveBin: bin=%d %s->%s (cascaded to contained items)",
         bin_id,

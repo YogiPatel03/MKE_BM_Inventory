@@ -10,6 +10,10 @@ class UsageEventCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class UsageEventReverseRequest(BaseModel):
+    notes: Optional[str] = None
+
+
 class UsageEventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -19,5 +23,7 @@ class UsageEventOut(BaseModel):
     processed_by_user_id: Optional[int] = None
     quantity_used: int
     notes: Optional[str] = None
+    is_reversal: bool = False
+    reverses_event_id: Optional[int] = None
     used_at: datetime
     created_at: datetime

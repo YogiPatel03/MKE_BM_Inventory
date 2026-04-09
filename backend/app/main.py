@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.routers import (
+    activity,
     auth,
     bin_transactions,
     bins,
@@ -68,6 +69,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     scheduler.add_job(_run_overdue_check, "interval", hours=1, id="overdue_check")
     scheduler.start()
+
+    # Ensure "Restock Me" cabinet exists
+    from app.services.restock_service import get_or_create_restock_cabinet
+    async with AsyncSessionLocal() as db:
+        await get_or_create_restock_cabinet(db)
+        await db.commit()
+
     log.info("Startup complete. Scheduler running.")
 
     if settings.is_production and settings.telegram_enabled:
@@ -115,6 +123,7 @@ app.include_router(inventory_requests.router, prefix="/api")
 app.include_router(purchases.router, prefix="/api")
 app.include_router(moves.router, prefix="/api")
 app.include_router(qr.router, prefix="/api")
+app.include_router(activity.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 app.include_router(telegram_webhook.router, prefix="/api")
 

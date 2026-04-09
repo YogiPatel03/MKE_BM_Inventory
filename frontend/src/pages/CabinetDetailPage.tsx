@@ -1,17 +1,76 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Box, Flame, FolderOpen, MapPin, Package, Plus, QrCode } from "lucide-react";
-import { getCabinet, listBins, listItems } from "@/api/cabinets";
+import { ArrowLeft, Box, Edit2, Flame, FolderOpen, MapPin, Package, Plus, QrCode } from "lucide-react";
+import { getCabinet, listBins, listItems, updateCabinet } from "@/api/cabinets";
 import { checkoutBin, returnBin, listBinTransactions } from "@/api/binTransactions";
 import { useAuthStore } from "@/store/auth";
-import type { Bin, BinTransaction, Item } from "@/types";
+import type { Bin, BinTransaction, Cabinet, Item } from "@/types";
 import { CheckoutModal } from "@/components/transactions/CheckoutModal";
 import { BinModal } from "@/components/modals/BinModal";
 import { BinQRModal } from "@/components/modals/BinQRModal";
 import { ItemModal } from "@/components/modals/ItemModal";
 import { MarkAsUsedModal } from "@/components/modals/MarkAsUsedModal";
 import { MoveModal } from "@/components/modals/MoveModal";
+
+function EditCabinetModal({ cabinet, onClose }: { cabinet: Cabinet; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(cabinet.name);
+  const [location, setLocation] = useState(cabinet.location ?? "");
+  const [description, setDescription] = useState(cabinet.description ?? "");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await updateCabinet(cabinet.id, {
+        name: name.trim(),
+        location: location.trim() || null,
+        description: description.trim() || null,
+      });
+      qc.invalidateQueries({ queryKey: ["cabinet", cabinet.id] });
+      qc.invalidateQueries({ queryKey: ["cabinets"] });
+      qc.invalidateQueries({ queryKey: ["activity"] });
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? "Failed to save changes");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
+      <div className="card w-full max-w-md p-6 relative">
+        <h2 className="text-lg font-semibold text-slate-900 mb-4">Edit Cabinet</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">Name *</label>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
+          </div>
+          <div>
+            <label className="label">Location</label>
+            <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Room 204, Shelf B" />
+          </div>
+          <div>
+            <label className="label">Description</label>
+            <textarea className="input resize-none" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+          </div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary flex-1 justify-center">Cancel</button>
+            <button type="submit" disabled={loading} className="btn-primary flex-1 justify-center">
+              {loading ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 function ItemRow({ item, inBin }: { item: Item; inBin: boolean }) {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -262,6 +321,7 @@ export function CabinetDetailPage() {
 
   const [binModalOpen, setBinModalOpen] = useState(false);
   const [itemModalOpen, setItemModalOpen] = useState(false);
+  const [editCabinetOpen, setEditCabinetOpen] = useState(false);
 
   const { data: allItems = [] } = useQuery({
     queryKey: ["items", "cabinet", cabinetId],
@@ -318,6 +378,10 @@ export function CabinetDetailPage() {
           </div>
           {canManage && (
             <div className="flex gap-2">
+              <button className="btn-secondary text-xs" onClick={() => setEditCabinetOpen(true)}>
+                <Edit2 className="h-4 w-4" />
+                Edit
+              </button>
               <button className="btn-secondary text-xs" onClick={() => setBinModalOpen(true)}>
                 <Plus className="h-4 w-4" />
                 Add Bin
@@ -368,6 +432,7 @@ export function CabinetDetailPage() {
 
       {binModalOpen && <BinModal cabinetId={cabinetId} onClose={() => setBinModalOpen(false)} />}
       {itemModalOpen && <ItemModal cabinetId={cabinetId} bins={bins} onClose={() => setItemModalOpen(false)} />}
+      {editCabinetOpen && cabinet && <EditCabinetModal cabinet={cabinet} onClose={() => setEditCabinetOpen(false)} />}
     </div>
   );
 }

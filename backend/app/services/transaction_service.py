@@ -15,9 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import InsufficientStockError, NotFoundError, TransactionConflictError
+from app.models.activity_log import ActivityType
 from app.models.item import Item
 from app.models.transaction import Transaction, TransactionStatus
 from app.models.user import User
+from app.services.activity_service import log_activity
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +82,19 @@ async def checkout_item(
     await db.flush()  # get transaction.id without committing
     await db.refresh(transaction)
 
+    await log_activity(
+        db,
+        activity_type=ActivityType.ITEM_CHECKED_OUT,
+        actor_id=processed_by_user_id,
+        target_item_id=item_id,
+        target_cabinet_id=item.cabinet_id,
+        quantity_delta=-quantity,
+        notes=notes,
+        metadata={"status": TransactionStatus.CHECKED_OUT, "due_at": due_at.isoformat() if due_at else None},
+        source_type="transaction",
+        source_id=transaction.id,
+    )
+
     log.info(
         "Checkout: transaction=%d item=%d user=%d qty=%d",
         transaction.id,
@@ -133,6 +148,18 @@ async def return_item(
         transaction.notes = (transaction.notes or "") + f"\n[Return] {notes}"
 
     item.quantity_available += transaction.quantity
+
+    await log_activity(
+        db,
+        activity_type=ActivityType.ITEM_RETURNED,
+        actor_id=processed_by_user_id,
+        target_item_id=transaction.item_id,
+        target_cabinet_id=item.cabinet_id,
+        quantity_delta=+transaction.quantity,
+        notes=notes,
+        source_type="transaction",
+        source_id=transaction.id,
+    )
 
     log.info(
         "Return: transaction=%d item=%d user=%d qty=%d",

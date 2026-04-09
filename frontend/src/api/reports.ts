@@ -1,15 +1,26 @@
 import { apiClient } from "./client";
 
+export interface LowStockItem {
+  itemId: number;
+  itemName: string;
+  cabinetId: number;
+  binId: number | null;
+  quantityAvailable: number;
+  quantityTotal: number;
+  lowStockThreshold: number | null;
+}
+
+export interface OutOfStockItem {
+  itemId: number;
+  itemName: string;
+  cabinetId: number;
+  binId: number | null;
+}
+
 export interface InventoryStatusReport {
   totalItems: number;
-  lowStockItems: {
-    itemId: number;
-    itemName: string;
-    cabinetId: number;
-    binId: number | null;
-    quantityAvailable: number;
-    quantityTotal: number;
-  }[];
+  lowStockItems: LowStockItem[];
+  outOfStockItems: OutOfStockItem[];
   checkedOutCount: number;
   overdueCount: number;
 }

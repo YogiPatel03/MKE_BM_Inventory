@@ -48,7 +48,24 @@ export async function createItem(payload: {
   return data;
 }
 
-export async function updateItem(id: number, payload: Partial<Item>): Promise<Item> {
-  const { data } = await apiClient.patch<Item>(`/items/${id}`, payload);
+export async function updateItem(
+  id: number,
+  payload: {
+    name?: string;
+    description?: string | null;
+    unitPrice?: number | null;
+    lowStockThreshold?: number | null;
+    isActive?: boolean;
+    condition?: string;
+  }
+): Promise<Item> {
+  const { data } = await apiClient.patch<Item>(`/items/${id}`, {
+    name: payload.name,
+    description: payload.description,
+    unit_price: payload.unitPrice,
+    low_stock_threshold: payload.lowStockThreshold,
+    is_active: payload.isActive,
+    condition: payload.condition,
+  });
   return data;
 }

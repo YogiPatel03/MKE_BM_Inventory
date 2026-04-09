@@ -22,11 +22,17 @@ from app.schemas.report import (
     ItemPurchaseSummary,
     ItemUsageSummary,
     LowStockItem,
+    OutOfStockItem,
 )
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
-LOW_STOCK_THRESHOLD = 2
+
+def _effective_threshold(item: Item) -> int:
+    """Compute low-stock threshold: explicit if set, else 10% of quantity_total (min 1)."""
+    if item.low_stock_threshold is not None:
+        return item.low_stock_threshold
+    return max(1, item.quantity_total // 10)
 
 
 @router.get("/inventory-status", response_model=InventoryStatusReport)
@@ -41,23 +47,35 @@ async def inventory_status(
     )
     total_items = total_result.scalar_one()
 
-    low_stock_result = await db.execute(
-        select(Item).where(
-            Item.is_active == True,
-            Item.quantity_available <= LOW_STOCK_THRESHOLD,
-        )
+    # Fetch all active items to classify by threshold (threshold is per-item)
+    all_items_result = await db.execute(
+        select(Item).where(Item.is_active == True)
     )
-    low_stock_items = [
-        LowStockItem(
-            item_id=i.id,
-            item_name=i.name,
-            cabinet_id=i.cabinet_id,
-            bin_id=i.bin_id,
-            quantity_available=i.quantity_available,
-            quantity_total=i.quantity_total,
-        )
-        for i in low_stock_result.scalars().all()
-    ]
+    all_items = list(all_items_result.scalars().all())
+
+    low_stock_items = []
+    out_of_stock_items = []
+
+    for item in all_items:
+        if item.quantity_available == 0:
+            out_of_stock_items.append(OutOfStockItem(
+                item_id=item.id,
+                item_name=item.name,
+                cabinet_id=item.cabinet_id,
+                bin_id=item.bin_id,
+            ))
+        else:
+            threshold = _effective_threshold(item)
+            if item.quantity_available <= threshold:
+                low_stock_items.append(LowStockItem(
+                    item_id=item.id,
+                    item_name=item.name,
+                    cabinet_id=item.cabinet_id,
+                    bin_id=item.bin_id,
+                    quantity_available=item.quantity_available,
+                    quantity_total=item.quantity_total,
+                    low_stock_threshold=threshold,
+                ))
 
     checked_out_result = await db.execute(
         select(func.count()).select_from(Transaction).where(
@@ -73,6 +91,7 @@ async def inventory_status(
     return InventoryStatusReport(
         total_items=total_items,
         low_stock_items=low_stock_items,
+        out_of_stock_items=out_of_stock_items,
         checked_out_count=checked_out_result.scalar_one(),
         overdue_count=overdue_result.scalar_one(),
     )
@@ -123,22 +142,36 @@ async def expense_report(
         )
 
     # ── Usage (consumption) side ────────────────────────────────────────────
-    # For each usage event, derive cost from the most recent purchase price at or before that event.
+    # Only count non-reversal events; reversals reduce quantity back so shouldn't
+    # count as spend. The net effect is correct because we only aggregate original events.
     usage_query = (
         select(UsageEvent, Item)
         .join(Item, UsageEvent.item_id == Item.id)
-        .where(UsageEvent.used_at.between(period_start, period_end))
+        .where(
+            UsageEvent.used_at.between(period_start, period_end),
+            UsageEvent.is_reversal == False,
+        )
     )
     if item_id:
         usage_query = usage_query.where(UsageEvent.item_id == item_id)
 
     usage_rows = (await db.execute(usage_query)).all()
 
+    # Build set of reversed event IDs so we can skip them
+    reversed_ids_result = await db.execute(
+        select(UsageEvent.reverses_event_id)
+        .where(UsageEvent.is_reversal == True, UsageEvent.reverses_event_id.is_not(None))
+    )
+    reversed_ids = set(reversed_ids_result.scalars().all())
+
     by_usage: dict[int, ItemUsageSummary] = {}
     total_usage_cost = 0.0
 
     for usage_event, item in usage_rows:
-        # Find the most recent purchase for this item at or before the usage event
+        # Skip events that have been reversed
+        if usage_event.id in reversed_ids:
+            continue
+
         price_result = await db.execute(
             select(PurchaseRecord.unit_price)
             .where(
@@ -150,7 +183,6 @@ async def expense_report(
             .limit(1)
         )
         historical_price = price_result.scalar_one_or_none()
-        # Fall back to item's current unit_price if no purchase record exists
         unit_cost = float(historical_price or item.unit_price or 0)
         event_cost = unit_cost * usage_event.quantity_used
         total_usage_cost += event_cost

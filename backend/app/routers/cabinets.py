@@ -4,9 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import require_manage_cabinets
 from app.dependencies import get_current_user, get_db
+from app.models.activity_log import ActivityType
 from app.models.cabinet import Cabinet
 from app.models.user import User
 from app.schemas.cabinet import CabinetCreate, CabinetDetail, CabinetOut, CabinetUpdate
+from app.services.activity_service import log_activity
 from app.services.inventory_service import get_cabinet_detail
 
 router = APIRouter(prefix="/cabinets", tags=["cabinets"])
@@ -60,8 +62,21 @@ async def update_cabinet(
     if not cabinet:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Cabinet not found")
 
-    for field, value in body.model_dump(exclude_none=True).items():
+    changes = body.model_dump(exclude_none=True)
+    before = {k: getattr(cabinet, k) for k in changes}
+    for field, value in changes.items():
         setattr(cabinet, field, value)
+    after = {k: getattr(cabinet, k) for k in changes}
+
+    await log_activity(
+        db,
+        activity_type=ActivityType.CABINET_EDITED,
+        actor_id=current_user.id,
+        target_cabinet_id=cabinet.id,
+        metadata={"before": before, "after": after},
+        source_type="cabinet",
+        source_id=cabinet.id,
+    )
 
     await db.commit()
     await db.refresh(cabinet)

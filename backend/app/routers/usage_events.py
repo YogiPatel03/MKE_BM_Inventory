@@ -1,14 +1,14 @@
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user as get_current_active_user, get_db
 from app.models.usage_event import UsageEvent
 from app.models.user import User
-from app.schemas.usage_event import UsageEventCreate, UsageEventOut
-from app.services.usage_service import mark_as_used
+from app.schemas.usage_event import UsageEventCreate, UsageEventOut, UsageEventReverseRequest
+from app.services.usage_service import mark_as_used, reverse_usage
 
 router = APIRouter(prefix="/usage-events", tags=["usage-events"])
 
@@ -30,6 +30,32 @@ async def create_usage_event(
     await db.commit()
     await db.refresh(event)
     return event
+
+
+@router.post("/{event_id}/reverse", response_model=UsageEventOut, status_code=201)
+async def reverse_usage_event(
+    event_id: int,
+    body: UsageEventReverseRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Reverse a usage event, restoring the consumed quantity.
+    Creates a compensating reversal record; original is preserved for audit.
+    Requires can_manage_inventory permission.
+    """
+    from app.core.permissions import require_manage_inventory
+    require_manage_inventory(current_user)
+
+    reversal = await reverse_usage(
+        db,
+        event_id=event_id,
+        reversed_by_user_id=current_user.id,
+        notes=body.notes,
+    )
+    await db.commit()
+    await db.refresh(reversal)
+    return reversal
 
 
 @router.get("/item/{item_id}", response_model=List[UsageEventOut])

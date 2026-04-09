@@ -18,6 +18,14 @@ export async function createCabinet(
   return data;
 }
 
+export async function updateCabinet(
+  id: number,
+  payload: { name?: string; location?: string | null; description?: string | null }
+): Promise<Cabinet> {
+  const { data } = await apiClient.patch<Cabinet>(`/cabinets/${id}`, payload);
+  return data;
+}
+
 export async function createBin(payload: {
   label: string;
   cabinetId: number;

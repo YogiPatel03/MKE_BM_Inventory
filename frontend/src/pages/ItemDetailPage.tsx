@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Flame, MapPin, Scale } from "lucide-react";
-import { getItem } from "@/api/items";
+import { ArrowLeft, Edit2, Flame, MapPin, RotateCcw, Scale } from "lucide-react";
+import { getItem, updateItem } from "@/api/items";
 import { listTransactions } from "@/api/transactions";
 import { apiClient } from "@/api/client";
 import { CheckoutModal } from "@/components/transactions/CheckoutModal";
@@ -28,16 +28,110 @@ async function fetchUsageEvents(itemId: number): Promise<UsageEvent[]> {
   return data;
 }
 
+async function reverseUsageEvent(eventId: number, notes?: string): Promise<void> {
+  await apiClient.post(`/usage-events/${eventId}/reverse`, { notes });
+}
+
+// Inline edit form for name/description/price
+function InlineEditModal({
+  item,
+  onClose,
+}: {
+  item: { id: number; name: string; description: string | null; unitPrice: number | null; lowStockThreshold: number | null };
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(item.name);
+  const [description, setDescription] = useState(item.description ?? "");
+  const [unitPrice, setUnitPrice] = useState(item.unitPrice?.toString() ?? "");
+  const [threshold, setThreshold] = useState(item.lowStockThreshold?.toString() ?? "");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await updateItem(item.id, {
+        name: name.trim(),
+        description: description.trim() || null,
+        unitPrice: unitPrice ? parseFloat(unitPrice) : undefined,
+        lowStockThreshold: threshold ? parseInt(threshold, 10) : undefined,
+      });
+      qc.invalidateQueries({ queryKey: ["item", item.id] });
+      qc.invalidateQueries({ queryKey: ["activity"] });
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? "Failed to save changes");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
+      <div className="card w-full max-w-md p-6 relative">
+        <h2 className="text-lg font-semibold text-slate-900 mb-4">Edit Item</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">Name *</label>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
+          </div>
+          <div>
+            <label className="label">Description</label>
+            <textarea className="input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Unit price ($)</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              className="input"
+              value={unitPrice}
+              onChange={(e) => setUnitPrice(e.target.value)}
+              placeholder="e.g. 4.99"
+            />
+          </div>
+          <div>
+            <label className="label">Low stock threshold</label>
+            <input
+              type="number"
+              min="0"
+              className="input"
+              value={threshold}
+              onChange={(e) => setThreshold(e.target.value)}
+              placeholder="Leave blank to use 10% of total"
+            />
+            <p className="text-xs text-slate-400 mt-1">Alert fires when available ≤ this value. Blank = 10% of total.</p>
+          </div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary flex-1 justify-center">Cancel</button>
+            <button type="submit" disabled={loading} className="btn-primary flex-1 justify-center">
+              {loading ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export function ItemDetailPage() {
   const { id } = useParams<{ id: string }>();
   const itemId = Number(id);
   const user = useAuthStore((s) => s.user);
-  const canManage = user?.role.canManageInventory || user?.role.canManageUsers;
+  const canManage = user?.role.canManageInventory;
+  const qc = useQueryClient();
 
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [markUsedOpen, setMarkUsedOpen] = useState(false);
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [reversingId, setReversingId] = useState<number | null>(null);
 
   const { data: item, isLoading } = useQuery({
     queryKey: ["item", itemId],
@@ -50,7 +144,7 @@ export function ItemDetailPage() {
     enabled: !!item && !item.isConsumable,
   });
 
-  const { data: usageEvents = [] } = useQuery<UsageEvent[]>({
+  const { data: usageEvents = [], refetch: refetchUsage } = useQuery<UsageEvent[]>({
     queryKey: ["usage-events", itemId],
     queryFn: () => fetchUsageEvents(itemId),
     enabled: !!item && item.isConsumable,
@@ -66,6 +160,21 @@ export function ItemDetailPage() {
     queryFn: () => fetchBins(item!.cabinetId),
     enabled: !!item,
   });
+
+  const handleReverse = async (eventId: number) => {
+    if (!confirm("Reverse this usage event? This will restore the consumed stock.")) return;
+    setReversingId(eventId);
+    try {
+      await reverseUsageEvent(eventId, "Reversed from UI");
+      await refetchUsage();
+      qc.invalidateQueries({ queryKey: ["item", itemId] });
+      qc.invalidateQueries({ queryKey: ["activity"] });
+    } catch (e: any) {
+      alert(e?.response?.data?.detail ?? "Failed to reverse usage event");
+    } finally {
+      setReversingId(null);
+    }
+  };
 
   if (isLoading) {
     return <div className="animate-pulse h-8 bg-slate-100 rounded w-48" />;
@@ -104,6 +213,13 @@ export function ItemDetailPage() {
             )}
           </div>
           <div className="flex gap-2 flex-wrap">
+            {/* Edit button for coordinators+ */}
+            {canManage && (
+              <button onClick={() => setEditOpen(true)} className="btn-secondary">
+                <Edit2 className="h-4 w-4" />
+                Edit
+              </button>
+            )}
             {/* Consumable: mark as used */}
             {item.isConsumable && item.quantityAvailable > 0 && (
               <button onClick={() => setMarkUsedOpen(true)} className="btn-primary bg-amber-600 hover:bg-amber-700">
@@ -181,6 +297,12 @@ export function ItemDetailPage() {
             <p className="text-sm font-medium text-slate-700">${item.unitPrice.toFixed(2)}</p>
           </div>
         )}
+        {item.lowStockThreshold != null && (
+          <div>
+            <p className="text-xs text-slate-500">Low stock threshold</p>
+            <p className="text-sm font-medium text-slate-700">{item.lowStockThreshold}</p>
+          </div>
+        )}
         <div>
           <p className="text-xs text-slate-500">Status</p>
           <span className={item.isActive ? "badge-green" : "badge-slate"}>
@@ -200,14 +322,35 @@ export function ItemDetailPage() {
               usageEvents.map((evt) => (
                 <div key={evt.id} className="px-4 py-3 flex items-center justify-between text-sm">
                   <div>
-                    <span className="font-medium text-slate-900">Used {evt.quantityUsed}</span>
+                    <div className="flex items-center gap-2">
+                      {evt.isReversal ? (
+                        <span className="badge-blue text-xs">Reversed</span>
+                      ) : (
+                        <span className="font-medium text-slate-900">Used {evt.quantityUsed}</span>
+                      )}
+                      {evt.reversesEventId && (
+                        <span className="text-xs text-slate-400">↩ reversal of #{evt.reversesEventId}</span>
+                      )}
+                    </div>
                     {evt.notes && (
-                      <span className="text-slate-400 ml-2">— {evt.notes}</span>
+                      <span className="text-slate-400 text-xs ml-0">{evt.notes}</span>
                     )}
                   </div>
-                  <span className="text-xs text-slate-400">
-                    {new Date(evt.usedAt).toLocaleDateString()}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-slate-400">
+                      {new Date(evt.usedAt).toLocaleDateString()}
+                    </span>
+                    {canManage && !evt.isReversal && !usageEvents.some((e) => e.reversesEventId === evt.id) && (
+                      <button
+                        className="text-xs text-slate-400 hover:text-red-600 flex items-center gap-1"
+                        onClick={() => handleReverse(evt.id)}
+                        disabled={reversingId === evt.id}
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        {reversingId === evt.id ? "…" : "Reverse"}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))
             )}
@@ -247,6 +390,9 @@ export function ItemDetailPage() {
           currentBinId={item.binId}
           onClose={() => setMoveOpen(false)}
         />
+      )}
+      {editOpen && item && (
+        <InlineEditModal item={item} onClose={() => setEditOpen(false)} />
       )}
     </div>
   );

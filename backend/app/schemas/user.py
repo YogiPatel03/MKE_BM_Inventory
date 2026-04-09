@@ -16,6 +16,7 @@ class RoleOut(BaseModel):
     can_process_any_transaction: bool
     can_view_all_transactions: bool
     can_view_audit_logs: bool
+    can_approve_requests: bool
 
 
 class UserOut(BaseModel):
@@ -55,9 +56,26 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
+    username: Optional[str] = None
     telegram_handle: Optional[str] = None
     role_id: Optional[int] = None
     is_active: Optional[bool] = None
+
+    @field_validator("username")
+    @classmethod
+    def username_lowercase(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip().lower() if v else v
+
+
+class PasswordResetRequest(BaseModel):
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def password_length(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        return v
 
 
 class TelegramLinkToken(BaseModel):

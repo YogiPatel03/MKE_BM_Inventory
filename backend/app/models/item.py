@@ -72,6 +72,15 @@ class Item(Base):
         String(36), nullable=True, unique=True, index=True
     )
 
+    # Low-stock threshold. If None, computed dynamically as max(1, quantity_total // 10).
+    # Set explicitly for consumables where quantity_total decreases over time.
+    low_stock_threshold: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Prior location stored when item is auto-moved to "Restock Me" cabinet.
+    # Cleared when item is restored to its original location.
+    prior_cabinet_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cabinets.id"), nullable=True)
+    prior_bin_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bins.id"), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -79,8 +88,8 @@ class Item(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    cabinet: Mapped["Cabinet"] = relationship("Cabinet", back_populates="items")
-    bin: Mapped[Optional["Bin"]] = relationship("Bin", back_populates="items")
+    cabinet: Mapped["Cabinet"] = relationship("Cabinet", foreign_keys=[cabinet_id], back_populates="items")
+    bin: Mapped[Optional["Bin"]] = relationship("Bin", foreign_keys=[bin_id], back_populates="items")
     transactions: Mapped[List["Transaction"]] = relationship("Transaction", back_populates="item")
     usage_events: Mapped[List["UsageEvent"]] = relationship("UsageEvent", back_populates="item")
     stock_adjustments: Mapped[List["StockAdjustment"]] = relationship(

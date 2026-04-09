@@ -46,7 +46,7 @@ class Bin(Base):
     )
 
     cabinet: Mapped["Cabinet"] = relationship("Cabinet", back_populates="bins")
-    items: Mapped[List["Item"]] = relationship("Item", back_populates="bin")
+    items: Mapped[List["Item"]] = relationship("Item", foreign_keys="Item.bin_id", back_populates="bin")
     bin_transactions: Mapped[List["BinTransaction"]] = relationship(
         "BinTransaction", back_populates="bin"
     )

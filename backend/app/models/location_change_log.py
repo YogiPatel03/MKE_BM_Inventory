@@ -29,8 +29,8 @@ class LocationChangeLog(Base):
     entity_type: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
     entity_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 
-    moved_by_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
+    moved_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
     )
 
     from_cabinet_id: Mapped[Optional[int]] = mapped_column(
@@ -51,7 +51,9 @@ class LocationChangeLog(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    moved_by: Mapped["User"] = relationship("User", back_populates="location_changes")
+    move_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    moved_by: Mapped[Optional["User"]] = relationship("User", back_populates="location_changes")
 
     def __repr__(self) -> str:
         return f"<LocationChangeLog {self.id} {self.entity_type}={self.entity_id}>"

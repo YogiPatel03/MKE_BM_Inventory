@@ -20,11 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundError, TransactionConflictError
+from app.models.activity_log import ActivityType
 from app.models.bin import Bin
 from app.models.bin_transaction import BinTransaction, BinTransactionStatus
 from app.models.item import Item
 from app.models.transaction import Transaction, TransactionStatus
 from app.models.user import User
+from app.services.activity_service import log_activity
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +104,19 @@ async def checkout_bin(
 
     await db.flush()
     await db.refresh(bin_txn)
+
+    await log_activity(
+        db,
+        activity_type=ActivityType.BIN_CHECKED_OUT,
+        actor_id=processed_by_user_id,
+        target_bin_id=bin_id,
+        target_cabinet_id=bin_obj.cabinet_id,
+        notes=notes,
+        metadata={"bin_transaction_id": bin_txn.id, "item_count": len(active_items)},
+        source_type="bin_transaction",
+        source_id=bin_txn.id,
+    )
+
     log.info("BinCheckout: bin_txn=%d bin=%d user=%d items=%d", bin_txn.id, bin_id, user_id, len(active_items))
     return bin_txn
 
@@ -149,5 +164,16 @@ async def return_bin(
 
     await db.flush()
     await db.refresh(bin_txn)
+
+    await log_activity(
+        db,
+        activity_type=ActivityType.BIN_RETURNED,
+        actor_id=processed_by_user_id,
+        target_bin_id=bin_txn.bin_id,
+        notes=notes,
+        source_type="bin_transaction",
+        source_id=bin_txn.id,
+    )
+
     log.info("BinReturn: bin_txn=%d bin=%d", bin_txn.id, bin_txn.bin_id)
     return bin_txn

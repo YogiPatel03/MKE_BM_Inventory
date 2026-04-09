@@ -35,15 +35,20 @@ export async function createUser(payload: {
 
 export async function updateUser(
   userId: number,
-  payload: { fullName?: string; roleId?: number; telegramHandle?: string; isActive?: boolean }
+  payload: { fullName?: string; username?: string; roleId?: number; telegramHandle?: string; isActive?: boolean }
 ): Promise<User> {
   const { data } = await apiClient.patch<User>(`/users/${userId}`, {
     full_name: payload.fullName,
+    username: payload.username,
     role_id: payload.roleId,
     telegram_handle: payload.telegramHandle,
     is_active: payload.isActive,
   });
   return data;
+}
+
+export async function resetUserPassword(userId: number, newPassword: string): Promise<void> {
+  await apiClient.post(`/users/${userId}/reset-password`, { new_password: newPassword });
 }
 
 export async function listRoles(): Promise<{ id: number; name: string }[]> {
