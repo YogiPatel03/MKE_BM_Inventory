@@ -128,3 +128,39 @@ async def notify_account_linked(chat_id: str, full_name: str) -> None:
         f"Welcome, <b>{full_name}</b>. You'll now receive inventory notifications here."
     )
     await _send(chat_id, text)
+
+
+async def notify_new_request(request_id: int, requester_name: str, target_name: str, reason: str | None) -> Optional[str]:
+    """Notify coordinator channel of a new pending request. Returns message_id."""
+    if not settings.telegram_coordinator_chat_id:
+        return None
+
+    reason_text = f"\nReason: {reason}" if reason else ""
+    text = (
+        f"📋 <b>New Request</b> #{request_id}\n"
+        f"From: {requester_name}\n"
+        f"Item: <b>{target_name}</b>{reason_text}\n\n"
+        f"/approve {request_id}  |  /deny {request_id}"
+    )
+    message_id = await _send(settings.telegram_coordinator_chat_id, text)
+    return str(message_id) if message_id else None
+
+
+async def notify_purchase_and_request_receipt(
+    purchase_id: int,
+    item_name: str,
+    quantity: int,
+    purchaser_name: str,
+) -> Optional[str]:
+    """Ask coordinator channel for a receipt after a purchase is logged."""
+    if not settings.telegram_coordinator_chat_id:
+        return None
+
+    text = (
+        f"🛒 <b>Purchase logged</b> #{purchase_id}\n"
+        f"Item: <b>{item_name}</b> × {quantity}\n"
+        f"By: {purchaser_name}\n\n"
+        f"📄 Please reply to this message with a receipt photo or scan."
+    )
+    message_id = await _send(settings.telegram_coordinator_chat_id, text)
+    return str(message_id) if message_id else None

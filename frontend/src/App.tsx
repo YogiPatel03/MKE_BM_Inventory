@@ -10,6 +10,10 @@ import { ItemDetailPage } from "@/pages/ItemDetailPage";
 import { TransactionsPage } from "@/pages/TransactionsPage";
 import { AdminPage } from "@/pages/AdminPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { InventoryListPage } from "@/pages/InventoryListPage";
+import { RequestsPage } from "@/pages/RequestsPage";
+import { ReportsPage } from "@/pages/ReportsPage";
+import { QRScanPage } from "@/pages/QRScanPage";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user);
@@ -54,6 +58,10 @@ export default function App() {
           <Route path="transactions" element={<TransactionsPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="inventory-list" element={<InventoryListPage />} />
+          <Route path="requests" element={<RequestsPage />} />
+          <Route path="reports" element={<ReportsPage />} />
+          <Route path="qr/:token" element={<QRScanPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

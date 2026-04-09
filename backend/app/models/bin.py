@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
@@ -9,16 +10,18 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.bin_transaction import BinTransaction
     from app.models.cabinet import Cabinet
+    from app.models.inventory_request import InventoryRequest
     from app.models.item import Item
 
 
 class Bin(Base):
     """
-    A sub-container inside a cabinet. Bins organize items spatially.
+    A sub-container inside a cabinet.
 
-    Bins are physical location anchors — they do NOT own checkout state.
-    The Transaction model is the authoritative source for item movement history.
+    Bins are physical location anchors. Items inside a bin are checked out
+    as a unit via BinTransaction — individual item checkout is blocked for binned items.
     """
 
     __tablename__ = "bins"
@@ -30,6 +33,11 @@ class Bin(Base):
     location_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # QR code token for bin scanning
+    qr_code_token: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, unique=True, index=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -39,6 +47,17 @@ class Bin(Base):
 
     cabinet: Mapped["Cabinet"] = relationship("Cabinet", back_populates="bins")
     items: Mapped[List["Item"]] = relationship("Item", back_populates="bin")
+    bin_transactions: Mapped[List["BinTransaction"]] = relationship(
+        "BinTransaction", back_populates="bin"
+    )
+    requests: Mapped[List["InventoryRequest"]] = relationship(
+        "InventoryRequest", back_populates="bin", foreign_keys="InventoryRequest.bin_id"
+    )
+
+    def generate_qr_token(self) -> str:
+        token = str(uuid.uuid4())
+        self.qr_code_token = token
+        return token
 
     def __repr__(self) -> str:
         return f"<Bin {self.label} in cabinet {self.cabinet_id}>"

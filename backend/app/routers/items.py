@@ -18,7 +18,7 @@ async def list_items(
     is_active: bool = True,
     search: str | None = None,
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 500,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[Item]:

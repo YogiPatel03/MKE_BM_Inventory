@@ -27,5 +27,6 @@ class BinOut(BinBase):
 
     id: int
     cabinet_id: int
+    qr_code_token: Optional[str] = None
     created_at: datetime
     updated_at: datetime

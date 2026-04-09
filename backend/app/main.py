@@ -9,7 +9,23 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import AsyncSessionLocal
-from app.routers import auth, bins, cabinets, items, telegram_webhook, transactions, users
+from app.routers import (
+    auth,
+    bin_transactions,
+    bins,
+    cabinets,
+    inventory_requests,
+    items,
+    moves,
+    purchases,
+    qr,
+    reports,
+    stock_adjustments,
+    telegram_webhook,
+    transactions,
+    usage_events,
+    users,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,6 +108,14 @@ app.include_router(cabinets.router, prefix="/api")
 app.include_router(bins.router, prefix="/api")
 app.include_router(items.router, prefix="/api")
 app.include_router(transactions.router, prefix="/api")
+app.include_router(usage_events.router, prefix="/api")
+app.include_router(stock_adjustments.router, prefix="/api")
+app.include_router(bin_transactions.router, prefix="/api")
+app.include_router(inventory_requests.router, prefix="/api")
+app.include_router(purchases.router, prefix="/api")
+app.include_router(moves.router, prefix="/api")
+app.include_router(qr.router, prefix="/api")
+app.include_router(reports.router, prefix="/api")
 app.include_router(telegram_webhook.router, prefix="/api")
 
 

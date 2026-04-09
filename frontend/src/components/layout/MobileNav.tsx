@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { Box, ClipboardList, LayoutDashboard, Settings, Shield } from "lucide-react";
+import { Box, ClipboardList, Inbox, LayoutDashboard, Settings, Shield } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
 import { clsx } from "clsx";
 
@@ -8,9 +8,10 @@ export function MobileNav() {
   const isAdmin = user?.role.canManageUsers ?? false;
 
   const items = [
-    { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/inventory", label: "Inventory", icon: Box },
+    { to: "/dashboard", label: "Home", icon: LayoutDashboard },
+    { to: "/inventory-list", label: "Items", icon: Box },
     { to: "/transactions", label: "Txns", icon: ClipboardList },
+    { to: "/requests", label: "Requests", icon: Inbox },
     ...(isAdmin ? [{ to: "/admin", label: "Admin", icon: Shield }] : []),
     { to: "/settings", label: "Settings", icon: Settings },
   ];

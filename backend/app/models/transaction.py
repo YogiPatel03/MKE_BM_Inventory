@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.bin_transaction import BinTransaction
     from app.models.item import Item
     from app.models.transaction_photo import TransactionPhoto
     from app.models.user import User
@@ -51,6 +52,9 @@ class Transaction(Base):
     processed_by_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id"), nullable=True
     )
+    bin_transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("bin_transactions.id"), nullable=True, index=True
+    )
 
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(
@@ -87,6 +91,9 @@ class Transaction(Base):
     )
     photos: Mapped[List["TransactionPhoto"]] = relationship(
         "TransactionPhoto", back_populates="transaction", cascade="all, delete-orphan"
+    )
+    bin_transaction: Mapped[Optional["BinTransaction"]] = relationship(
+        "BinTransaction", back_populates="transactions"
     )
 
     @property

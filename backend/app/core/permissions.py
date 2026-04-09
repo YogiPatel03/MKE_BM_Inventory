@@ -38,6 +38,11 @@ def require_view_audit_logs(user: User) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Audit log access required")
 
 
+def require_approve_requests(user: User) -> None:
+    if not (user.role.can_approve_requests or user.role.can_manage_users):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Request approval permission required")
+
+
 def can_process_transaction_for(actor: User, target_user_id: int) -> bool:
     """
     Returns True if `actor` is allowed to initiate a transaction on behalf of

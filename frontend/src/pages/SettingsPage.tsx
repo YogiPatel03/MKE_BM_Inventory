@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link2, CheckCircle, Copy } from "lucide-react";
+import { Link2, CheckCircle, Copy, LogOut } from "lucide-react";
 import { apiClient } from "@/api/client";
 import { useAuthStore } from "@/store/auth";
 
@@ -10,6 +10,7 @@ async function generateLinkToken(): Promise<{ token: string; instructions: strin
 
 export function SettingsPage() {
   const user = useAuthStore((s) => s.user);
+  const logout = useAuthStore((s) => s.logout);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -37,9 +38,19 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-6 max-w-xl">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Settings</h1>
-        <p className="text-sm text-slate-500 mt-0.5">Account preferences</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Settings</h1>
+          <p className="text-sm text-slate-500 mt-0.5">Account preferences</p>
+        </div>
+        {/* Mobile logout — desktop sidebar has its own logout button */}
+        <button
+          onClick={logout}
+          className="md:hidden flex items-center gap-2 text-sm text-red-600 hover:text-red-700 font-medium"
+        >
+          <LogOut className="h-4 w-4" />
+          Sign out
+        </button>
       </div>
 
       {/* Profile */}

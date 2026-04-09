@@ -12,6 +12,8 @@ class ItemBase(BaseModel):
     bin_id: Optional[int] = None
     sku: Optional[str] = None
     condition: str = "GOOD"
+    is_consumable: bool = False
+    unit_price: Optional[float] = None
 
 
 class ItemCreate(ItemBase):
@@ -31,6 +33,8 @@ class ItemUpdate(BaseModel):
     sku: Optional[str] = None
     condition: Optional[str] = None
     is_active: Optional[bool] = None
+    is_consumable: Optional[bool] = None
+    unit_price: Optional[float] = None
 
 
 class ItemOut(ItemBase):
@@ -39,5 +43,6 @@ class ItemOut(ItemBase):
     id: int
     quantity_available: int
     is_active: bool
+    qr_code_token: Optional[str] = None
     created_at: datetime
     updated_at: datetime

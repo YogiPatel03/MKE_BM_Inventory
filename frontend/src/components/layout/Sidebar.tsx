@@ -1,17 +1,20 @@
 import { NavLink, useNavigate } from "react-router-dom";
-import { Box, ClipboardList, LayoutDashboard, LogOut, Settings, Shield } from "lucide-react";
+import { Box, ClipboardList, LayoutDashboard, LogOut, PackageSearch, Settings, Shield, FileText, Inbox } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
 import { clsx } from "clsx";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/inventory", label: "Inventory", icon: Box },
+  { to: "/inventory", label: "Cabinets", icon: Box },
+  { to: "/inventory-list", label: "All Inventory", icon: PackageSearch },
   { to: "/transactions", label: "Transactions", icon: ClipboardList },
+  { to: "/requests", label: "Requests", icon: Inbox },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
 const adminItems = [
   { to: "/admin", label: "Admin", icon: Shield },
+  { to: "/reports", label: "Reports", icon: FileText },
 ];
 
 export function Sidebar() {

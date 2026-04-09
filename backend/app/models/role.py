@@ -15,13 +15,11 @@ class Role(Base):
     """
     Defines a permission set for a class of users.
 
-    Roles are created by seed/migration and referenced by User.
-    Boolean flags drive all authorization checks — no magic strings
-    in business logic. The four built-in roles are:
+    Built-in roles (seeded via migration):
       ADMIN       — full system access, manages users
-      COORDINATOR — manages inventory and processes any transaction
-      GROUP_LEAD  — processes transactions, views full history
-      USER        — checks out / returns their own items
+      COORDINATOR — manages inventory, processes any transaction, approves requests
+      GROUP_LEAD  — processes transactions, approves requests, views full history
+      USER        — creates requests; cannot directly checkout
     """
 
     __tablename__ = "roles"
@@ -40,6 +38,9 @@ class Role(Base):
     # Transaction permissions
     can_process_any_transaction: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     can_view_all_transactions: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Request/approval workflow
+    can_approve_requests: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Audit
     can_view_audit_logs: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

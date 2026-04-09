@@ -56,8 +56,19 @@ async def handle_update(body: dict[str, Any], db: AsyncSession) -> None:
     elif command == "/status" and len(parts) >= 2:
         item_query = " ".join(parts[1:])
         await cmd_item_status(chat_id, item_query, db)
+    elif command == "/requests":
+        await cmd_requests(chat_id, db)
+    elif command == "/approve" and len(parts) == 2:
+        await cmd_approve(chat_id, parts[1], db)
+    elif command == "/deny" and len(parts) >= 2:
+        reason = " ".join(parts[2:]) if len(parts) > 2 else None
+        await cmd_deny(chat_id, parts[1], reason, db)
     else:
-        await _send(chat_id, "Unknown command. Try /start, /myitems, /overdue, or /status <item>")
+        await _send(
+            chat_id,
+            "Unknown command. Try /start, /myitems, /overdue, /status <item>, /requests, "
+            "/approve <id>, /deny <id> [reason]",
+        )
 
 
 async def handle_photo_reply(message: dict[str, Any], chat_id: str, db: AsyncSession) -> None:
@@ -137,7 +148,10 @@ async def cmd_start(chat_id: str) -> None:
         "/link <token> — Link your account\n"
         "/myitems — Your checked-out items\n"
         "/overdue — Overdue checkouts (coordinators)\n"
-        "/status <item name> — Check item availability\n\n"
+        "/status <item name> — Check item availability\n"
+        "/requests — Pending requests (coordinators)\n"
+        "/approve <id> — Approve a request\n"
+        "/deny <id> [reason] — Deny a request\n\n"
         "Get your link token from the web app under Settings → Link Telegram."
     )
     await _send(chat_id, text)
@@ -248,3 +262,136 @@ async def cmd_item_status(chat_id: str, item_query: str, db: AsyncSession) -> No
         lines.append(f"• {item.name} — {item.quantity_available}/{item.quantity_total} {avail}")
 
     await _send(chat_id, "\n".join(lines))
+
+
+async def cmd_requests(chat_id: str, db: AsyncSession) -> None:
+    from app.models.inventory_request import InventoryRequest, RequestStatus
+
+    user_result = await db.execute(
+        select(User)
+        .where(User.telegram_chat_id == chat_id, User.is_active == True)
+        .options(selectinload(User.role))
+    )
+    user = user_result.scalar_one_or_none()
+    if not user:
+        await _send(chat_id, "❌ Account not linked. Use /link <token> first.")
+        return
+
+    if not (user.role.can_approve_requests or user.role.can_manage_users):
+        await _send(chat_id, "❌ This command requires coordinator access.")
+        return
+
+    result = await db.execute(
+        select(InventoryRequest)
+        .where(InventoryRequest.status == RequestStatus.PENDING)
+        .options(
+            selectinload(InventoryRequest.requester),
+            selectinload(InventoryRequest.item),
+            selectinload(InventoryRequest.bin),
+        )
+        .order_by(InventoryRequest.created_at)
+        .limit(20)
+    )
+    requests = result.scalars().all()
+
+    if not requests:
+        await _send(chat_id, "✅ No pending requests.")
+        return
+
+    lines = [f"<b>📋 Pending requests ({len(requests)}):</b>"]
+    for req in requests:
+        requester = req.requester.username
+        target = req.item.name if req.item else f"Bin #{req.bin_id}"
+        qty = f" × {req.quantity_requested}" if req.quantity_requested > 1 else ""
+        reason = f" — {req.reason}" if req.reason else ""
+        lines.append(f"• #{req.id} {target}{qty} by {requester}{reason}")
+        lines.append(f"  /approve {req.id}  |  /deny {req.id}")
+
+    await _send(chat_id, "\n".join(lines))
+
+
+async def cmd_approve(chat_id: str, request_id_str: str, db: AsyncSession) -> None:
+    from app.models.inventory_request import InventoryRequest, RequestStatus
+    from app.services.request_service import approve_request
+
+    user_result = await db.execute(
+        select(User)
+        .where(User.telegram_chat_id == chat_id, User.is_active == True)
+        .options(selectinload(User.role))
+    )
+    user = user_result.scalar_one_or_none()
+    if not user:
+        await _send(chat_id, "❌ Account not linked.")
+        return
+
+    if not (user.role.can_approve_requests or user.role.can_manage_users):
+        await _send(chat_id, "❌ Permission denied.")
+        return
+
+    try:
+        request_id = int(request_id_str)
+    except ValueError:
+        await _send(chat_id, "❌ Invalid request ID.")
+        return
+
+    try:
+        req = await approve_request(db, request_id=request_id, approver_id=user.id, due_at=None)
+        await db.commit()
+
+        target_name = f"Bin #{req.bin_id}" if req.bin_id else f"Item #{req.item_id}"
+        await _send(chat_id, f"✅ Request #{req.id} approved ({target_name}).")
+
+        # Notify requester if linked
+        requester_result = await db.execute(select(User).where(User.id == req.requester_id))
+        requester = requester_result.scalar_one_or_none()
+        if requester and requester.telegram_chat_id:
+            from app.services.telegram_service import _send as tg_send
+            await tg_send(
+                requester.telegram_chat_id,
+                f"✅ Your request #{req.id} for <b>{target_name}</b> has been approved!",
+            )
+    except Exception as e:
+        await _send(chat_id, f"❌ Error: {e}")
+
+
+async def cmd_deny(chat_id: str, request_id_str: str, reason: str | None, db: AsyncSession) -> None:
+    from app.services.request_service import deny_request
+
+    user_result = await db.execute(
+        select(User)
+        .where(User.telegram_chat_id == chat_id, User.is_active == True)
+        .options(selectinload(User.role))
+    )
+    user = user_result.scalar_one_or_none()
+    if not user:
+        await _send(chat_id, "❌ Account not linked.")
+        return
+
+    if not (user.role.can_approve_requests or user.role.can_manage_users):
+        await _send(chat_id, "❌ Permission denied.")
+        return
+
+    try:
+        request_id = int(request_id_str)
+    except ValueError:
+        await _send(chat_id, "❌ Invalid request ID.")
+        return
+
+    try:
+        req = await deny_request(
+            db, request_id=request_id, approver_id=user.id, denial_reason=reason
+        )
+        await db.commit()
+        await _send(chat_id, f"❌ Request #{req.id} denied.")
+
+        requester_result = await db.execute(select(User).where(User.id == req.requester_id))
+        requester = requester_result.scalar_one_or_none()
+        if requester and requester.telegram_chat_id:
+            from app.services.telegram_service import _send as tg_send
+            reason_text = f"\nReason: {reason}" if reason else ""
+            await tg_send(
+                requester.telegram_chat_id,
+                f"❌ Your request #{req.id} was denied.{reason_text}",
+            )
+    except Exception as e:
+        await _send(chat_id, f"❌ Error: {e}")

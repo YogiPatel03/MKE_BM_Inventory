@@ -10,6 +10,7 @@ export interface Role {
   canProcessAnyTransaction: boolean;
   canViewAllTransactions: boolean;
   canViewAuditLogs: boolean;
+  canApproveRequests: boolean;
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -49,6 +50,7 @@ export interface Bin {
   groupNumber: number | null;
   locationNote: string | null;
   description: string | null;
+  qrCodeToken: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,6 +70,9 @@ export interface Item {
   sku: string | null;
   condition: ItemCondition;
   isActive: boolean;
+  isConsumable: boolean;
+  unitPrice: number | null;
+  qrCodeToken: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -110,4 +115,101 @@ export interface CheckoutRequest {
 
 export interface ReturnRequest {
   notes?: string;
+}
+
+// ─── Stock Adjustments ────────────────────────────────────────────────────────
+
+export interface StockAdjustment {
+  id: number;
+  itemId: number;
+  adjustedByUserId: number;
+  delta: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  reason: string;
+  notes: string | null;
+  adjustedAt: string;
+  createdAt: string;
+}
+
+// ─── Usage Events ─────────────────────────────────────────────────────────────
+
+export interface UsageEvent {
+  id: number;
+  itemId: number;
+  userId: number;
+  processedByUserId: number | null;
+  quantityUsed: number;
+  notes: string | null;
+  usedAt: string;
+  createdAt: string;
+}
+
+// ─── Bin Transactions ─────────────────────────────────────────────────────────
+
+export type BinTransactionStatus = "CHECKED_OUT" | "RETURNED" | "OVERDUE" | "CANCELLED";
+
+export interface BinTransaction {
+  id: number;
+  binId: number;
+  userId: number;
+  processedByUserId: number | null;
+  status: BinTransactionStatus;
+  checkedOutAt: string;
+  dueAt: string | null;
+  returnedAt: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Inventory Requests ───────────────────────────────────────────────────────
+
+export type RequestStatus = "PENDING" | "APPROVED" | "DENIED" | "FULFILLED" | "CANCELLED";
+
+export interface InventoryRequest {
+  id: number;
+  requesterId: number;
+  approverId: number | null;
+  itemId: number | null;
+  binId: number | null;
+  quantityRequested: number;
+  status: RequestStatus;
+  reason: string | null;
+  denialReason: string | null;
+  dueAt: string | null;
+  approvedAt: string | null;
+  fulfilledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Purchases ────────────────────────────────────────────────────────────────
+
+export interface PurchaseRecord {
+  id: number;
+  itemId: number;
+  purchasedByUserId: number;
+  receiptId: number | null;
+  quantityPurchased: number;
+  unitPrice: number | null;
+  totalPrice: number | null;
+  vendor: string | null;
+  notes: string | null;
+  purchasedAt: string;
+  createdAt: string;
+}
+
+export interface ReceiptRecord {
+  id: number;
+  uploadedByUserId: number | null;
+  filePath: string | null;
+  fileName: string | null;
+  mimeType: string | null;
+  totalAmount: number | null;
+  vendor: string | null;
+  notes: string | null;
+  uploadedVia: string;
+  uploadedAt: string;
+  createdAt: string;
 }
