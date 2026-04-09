@@ -26,9 +26,6 @@ def upgrade() -> None:
         sa.Column("used_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
-    op.create_index("ix_usage_events_item_id", "usage_events", ["item_id"])
-    op.create_index("ix_usage_events_user_id", "usage_events", ["user_id"])
-
     # stock_adjustments
     op.create_table(
         "stock_adjustments",
@@ -43,9 +40,6 @@ def upgrade() -> None:
         sa.Column("adjusted_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
-    op.create_index("ix_stock_adjustments_item_id", "stock_adjustments", ["item_id"])
-    op.create_index("ix_stock_adjustments_adjusted_by_user_id", "stock_adjustments", ["adjusted_by_user_id"])
-
     # location_change_logs
     op.create_table(
         "location_change_logs",
@@ -61,9 +55,6 @@ def upgrade() -> None:
         sa.Column("moved_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
-    op.create_index("ix_location_change_logs_entity_type", "location_change_logs", ["entity_type"])
-    op.create_index("ix_location_change_logs_entity_id", "location_change_logs", ["entity_id"])
-    op.create_index("ix_location_change_logs_moved_by_user_id", "location_change_logs", ["moved_by_user_id"])
 
 
 def downgrade() -> None:

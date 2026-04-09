@@ -5,6 +5,13 @@ from app.models.bin import Bin
 from app.models.item import Item
 from app.models.transaction import Transaction, TransactionStatus
 from app.models.transaction_photo import TransactionPhoto
+from app.models.bin_transaction import BinTransaction, BinTransactionStatus
+from app.models.usage_event import UsageEvent
+from app.models.stock_adjustment import StockAdjustment
+from app.models.location_change_log import LocationChangeLog
+from app.models.inventory_request import InventoryRequest, RequestStatus
+from app.models.purchase_record import PurchaseRecord
+from app.models.receipt_record import ReceiptRecord
 
 __all__ = [
     "Role",
@@ -15,4 +22,13 @@ __all__ = [
     "Transaction",
     "TransactionStatus",
     "TransactionPhoto",
+    "BinTransaction",
+    "BinTransactionStatus",
+    "UsageEvent",
+    "StockAdjustment",
+    "LocationChangeLog",
+    "InventoryRequest",
+    "RequestStatus",
+    "PurchaseRecord",
+    "ReceiptRecord",
 ]
