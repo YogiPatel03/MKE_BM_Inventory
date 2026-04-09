@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link2, CheckCircle, Copy, LogOut } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { apiClient } from "@/api/client";
 import { useAuthStore } from "@/store/auth";
 
@@ -11,6 +12,7 @@ async function generateLinkToken(): Promise<{ token: string; instructions: strin
 export function SettingsPage() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const navigate = useNavigate();
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -45,7 +47,7 @@ export function SettingsPage() {
         </div>
         {/* Mobile logout — desktop sidebar has its own logout button */}
         <button
-          onClick={logout}
+          onClick={() => { logout(); navigate("/login"); }}
           className="md:hidden flex items-center gap-2 text-sm text-red-600 hover:text-red-700 font-medium"
         >
           <LogOut className="h-4 w-4" />

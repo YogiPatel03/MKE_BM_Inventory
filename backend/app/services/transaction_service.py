@@ -51,6 +51,17 @@ async def checkout_item(
     if not user_result.scalar_one_or_none():
         raise NotFoundError("User", user_id)
 
+    # Items inside a bin must be checked out via BinTransaction, not individually
+    if item.bin_id is not None:
+        raise TransactionConflictError(
+            f"Item '{item.name}' is inside a bin. Check out the whole bin instead."
+        )
+
+    if item.is_consumable:
+        raise TransactionConflictError(
+            f"Item '{item.name}' is consumable. Use mark-as-used instead of checkout."
+        )
+
     if item.quantity_available < quantity:
         raise InsufficientStockError(item.name, quantity, item.quantity_available)
 

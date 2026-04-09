@@ -1,16 +1,20 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Box, FolderOpen, MapPin, Plus } from "lucide-react";
+import { ArrowLeft, Box, Flame, FolderOpen, MapPin, Package, Plus } from "lucide-react";
 import { getCabinet, listBins, listItems } from "@/api/cabinets";
+import { checkoutBin, returnBin, listBinTransactions } from "@/api/binTransactions";
 import { useAuthStore } from "@/store/auth";
-import type { Item } from "@/types";
+import type { Bin, BinTransaction, Item } from "@/types";
 import { CheckoutModal } from "@/components/transactions/CheckoutModal";
 import { BinModal } from "@/components/modals/BinModal";
 import { ItemModal } from "@/components/modals/ItemModal";
-import { useState } from "react";
+import { MarkAsUsedModal } from "@/components/modals/MarkAsUsedModal";
+import { MoveModal } from "@/components/modals/MoveModal";
 
-function ItemRow({ item }: { item: Item }) {
+function ItemRow({ item, inBin }: { item: Item; inBin: boolean }) {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [markUsedOpen, setMarkUsedOpen] = useState(false);
 
   const availColor =
     item.quantityAvailable === 0
@@ -29,12 +33,28 @@ function ItemRow({ item }: { item: Item }) {
           {item.name}
         </Link>
         {item.sku && <p className="text-xs text-slate-400">SKU: {item.sku}</p>}
+        <div className="flex items-center gap-2 mt-0.5">
+          {item.isConsumable && (
+            <span className="text-xs text-amber-600 font-medium">consumable</span>
+          )}
+        </div>
       </div>
       <div className="flex items-center gap-3 flex-shrink-0 ml-4">
         <span className={availColor}>
           {item.quantityAvailable}/{item.quantityTotal}
         </span>
-        {item.quantityAvailable > 0 && (
+        {/* Consumable: mark as used */}
+        {item.isConsumable && item.quantityAvailable > 0 && (
+          <button
+            onClick={() => setMarkUsedOpen(true)}
+            className="btn-primary text-xs py-1 px-3 bg-amber-600 hover:bg-amber-700"
+          >
+            <Flame className="h-3.5 w-3.5" />
+            Use
+          </button>
+        )}
+        {/* Non-consumable, not in bin: individual checkout */}
+        {!item.isConsumable && !inBin && item.quantityAvailable > 0 && (
           <button
             onClick={() => setCheckoutOpen(true)}
             className="btn-primary text-xs py-1 px-3"
@@ -46,6 +66,169 @@ function ItemRow({ item }: { item: Item }) {
       {checkoutOpen && (
         <CheckoutModal item={item} onClose={() => setCheckoutOpen(false)} />
       )}
+      {markUsedOpen && (
+        <MarkAsUsedModal item={item} onClose={() => setMarkUsedOpen(false)} />
+      )}
+    </div>
+  );
+}
+
+interface BinSectionProps {
+  bin: Bin;
+  items: Item[];
+  cabinetId: number;
+  canManage: boolean;
+  canProcess: boolean;
+  activeBinTxn: BinTransaction | undefined;
+  onBinTxnChange: () => void;
+}
+
+function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn, onBinTxnChange }: BinSectionProps) {
+  const qc = useQueryClient();
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [checkoutNotes, setCheckoutNotes] = useState("");
+  const [returnNotes, setReturnNotes] = useState("");
+  const [showCheckoutForm, setShowCheckoutForm] = useState(false);
+  const [showReturnForm, setShowReturnForm] = useState(false);
+
+  const checkoutMut = useMutation({
+    mutationFn: () => checkoutBin({ binId: bin.id, notes: checkoutNotes || undefined }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["items", "cabinet", cabinetId] });
+      qc.invalidateQueries({ queryKey: ["bin-transactions"] });
+      onBinTxnChange();
+      setShowCheckoutForm(false);
+      setCheckoutNotes("");
+    },
+  });
+
+  const returnMut = useMutation({
+    mutationFn: () => returnBin(activeBinTxn!.id, returnNotes || undefined),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["items", "cabinet", cabinetId] });
+      qc.invalidateQueries({ queryKey: ["bin-transactions"] });
+      onBinTxnChange();
+      setShowReturnForm(false);
+      setReturnNotes("");
+    },
+  });
+
+  const hasItems = items.length > 0;
+  const isCheckedOut = activeBinTxn !== undefined;
+
+  return (
+    <div className="space-y-2">
+      {/* Bin header */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <FolderOpen className="h-4 w-4 text-slate-400" />
+          <h2 className="text-sm font-semibold text-slate-700">{bin.label}</h2>
+          {bin.locationNote && (
+            <span className="text-xs text-slate-400">— {bin.locationNote}</span>
+          )}
+          {isCheckedOut && (
+            <span className="badge-yellow text-xs">Checked out</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {canManage && (
+            <button
+              onClick={() => setMoveOpen(true)}
+              className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1"
+            >
+              <MapPin className="h-3.5 w-3.5" /> Move bin
+            </button>
+          )}
+          {canProcess && !isCheckedOut && hasItems && !showCheckoutForm && (
+            <button
+              onClick={() => setShowCheckoutForm(true)}
+              className="btn-primary text-xs py-1 px-3"
+            >
+              <Package className="h-3.5 w-3.5" />
+              Check out bin
+            </button>
+          )}
+          {canProcess && isCheckedOut && !showReturnForm && (
+            <button
+              onClick={() => setShowReturnForm(true)}
+              className="btn-secondary text-xs py-1 px-3"
+            >
+              Return bin
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Checkout form */}
+      {showCheckoutForm && (
+        <div className="rounded-lg border border-brand-200 bg-brand-50 p-3 space-y-2">
+          <p className="text-xs font-medium text-brand-800">
+            Check out all {items.length} item(s) in this bin as one unit
+          </p>
+          <input
+            className="input text-sm"
+            placeholder="Notes (optional)"
+            value={checkoutNotes}
+            onChange={(e) => setCheckoutNotes(e.target.value)}
+          />
+          {checkoutMut.isError && (
+            <p className="text-xs text-red-600">{(checkoutMut.error as any)?.response?.data?.detail ?? "Failed"}</p>
+          )}
+          <div className="flex gap-2">
+            <button onClick={() => { checkoutMut.mutate(); }} disabled={checkoutMut.isPending} className="btn-primary text-xs py-1 px-3">
+              {checkoutMut.isPending ? "Checking out…" : "Confirm checkout"}
+            </button>
+            <button onClick={() => setShowCheckoutForm(false)} className="btn-secondary text-xs py-1 px-3">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Return form */}
+      {showReturnForm && (
+        <div className="rounded-lg border border-green-200 bg-green-50 p-3 space-y-2">
+          <p className="text-xs font-medium text-green-800">Return all items in this bin</p>
+          <input
+            className="input text-sm"
+            placeholder="Return notes (optional)"
+            value={returnNotes}
+            onChange={(e) => setReturnNotes(e.target.value)}
+          />
+          {returnMut.isError && (
+            <p className="text-xs text-red-600">{(returnMut.error as any)?.response?.data?.detail ?? "Failed"}</p>
+          )}
+          <div className="flex gap-2">
+            <button onClick={() => { returnMut.mutate(); }} disabled={returnMut.isPending} className="btn-primary text-xs py-1 px-3 bg-green-600 hover:bg-green-700">
+              {returnMut.isPending ? "Returning…" : "Confirm return"}
+            </button>
+            <button onClick={() => setShowReturnForm(false)} className="btn-secondary text-xs py-1 px-3">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Items */}
+      <div className="card overflow-hidden divide-y divide-slate-100">
+        {items.length === 0 ? (
+          <p className="py-4 px-4 text-sm text-slate-400">No items in this bin</p>
+        ) : (
+          items.map((item) => (
+            <ItemRow key={item.id} item={item} inBin={!item.isConsumable} />
+          ))
+        )}
+      </div>
+
+      {moveOpen && (
+        <MoveModal
+          entityType="bin"
+          entityId={bin.id}
+          entityName={bin.label}
+          currentCabinetId={cabinetId}
+          onClose={() => setMoveOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -55,6 +238,8 @@ export function CabinetDetailPage() {
   const cabinetId = Number(id);
   const user = useAuthStore((s) => s.user);
   const canManage = user?.role.canManageInventory ?? false;
+  const canProcess = user?.role.canProcessAnyTransaction || user?.role.canManageUsers || false;
+  useQueryClient(); // ensure query client available for child component mutations
 
   const { data: cabinet, isLoading: cabLoading } = useQuery({
     queryKey: ["cabinet", cabinetId],
@@ -73,6 +258,19 @@ export function CabinetDetailPage() {
     queryKey: ["items", "cabinet", cabinetId],
     queryFn: () => listItems({ cabinet_id: cabinetId }),
   });
+
+  const { data: binTransactions = [], refetch: refetchBinTxns } = useQuery<BinTransaction[]>({
+    queryKey: ["bin-transactions"],
+    queryFn: listBinTransactions,
+    enabled: canProcess,
+  });
+
+  // Map bin_id -> active BinTransaction
+  const activeBinTxnMap = Object.fromEntries(
+    binTransactions
+      .filter((bt) => bt.status === "CHECKED_OUT")
+      .map((bt) => [bt.binId, bt])
+  );
 
   const directItems = allItems.filter((i) => !i.binId);
   const itemsByBin = (binId: number) => allItems.filter((i) => i.binId === binId);
@@ -132,13 +330,26 @@ export function CabinetDetailPage() {
           </h2>
           <div className="card overflow-hidden divide-y divide-slate-100">
             {directItems.map((item) => (
-              <ItemRow key={item.id} item={item} />
+              <ItemRow key={item.id} item={item} inBin={false} />
             ))}
           </div>
         </div>
       )}
 
       {/* Bins */}
+      {bins.map((bin) => (
+        <BinSection
+          key={bin.id}
+          bin={bin}
+          items={itemsByBin(bin.id)}
+          cabinetId={cabinetId}
+          canManage={canManage}
+          canProcess={canProcess}
+          activeBinTxn={activeBinTxnMap[bin.id]}
+          onBinTxnChange={() => refetchBinTxns()}
+        />
+      ))}
+
       {bins.length === 0 && directItems.length === 0 && (
         <div className="py-20 text-center">
           <Box className="h-10 w-10 text-slate-300 mx-auto mb-3" />
@@ -148,25 +359,6 @@ export function CabinetDetailPage() {
 
       {binModalOpen && <BinModal cabinetId={cabinetId} onClose={() => setBinModalOpen(false)} />}
       {itemModalOpen && <ItemModal cabinetId={cabinetId} bins={bins} onClose={() => setItemModalOpen(false)} />}
-
-      {bins.map((bin) => (
-        <div key={bin.id}>
-          <div className="flex items-center gap-2 mb-2">
-            <FolderOpen className="h-4 w-4 text-slate-400" />
-            <h2 className="text-sm font-semibold text-slate-700">{bin.label}</h2>
-            {bin.locationNote && (
-              <span className="text-xs text-slate-400">— {bin.locationNote}</span>
-            )}
-          </div>
-          <div className="card overflow-hidden divide-y divide-slate-100">
-            {itemsByBin(bin.id).length === 0 ? (
-              <p className="py-4 px-4 text-sm text-slate-400">No items in this bin</p>
-            ) : (
-              itemsByBin(bin.id).map((item) => <ItemRow key={item.id} item={item} />)
-            )}
-          </div>
-        </div>
-      ))}
     </div>
   );
 }

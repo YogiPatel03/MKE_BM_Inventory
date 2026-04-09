@@ -4,16 +4,22 @@ import { useQuery } from "@tanstack/react-query";
 import { Search, AlertTriangle } from "lucide-react";
 import { listItems } from "@/api/items";
 import { apiClient } from "@/api/client";
-import type { Cabinet } from "@/types";
+import type { Bin, Cabinet } from "@/types";
 
 async function fetchCabinets(): Promise<Cabinet[]> {
   const { data } = await apiClient.get("/cabinets");
   return data;
 }
 
+async function fetchAllBins(): Promise<Bin[]> {
+  const { data } = await apiClient.get("/bins");
+  return data;
+}
+
 export function InventoryListPage() {
   const [search, setSearch] = useState("");
   const [cabinetFilter, setCabinetFilter] = useState<string>("");
+  const [binFilter, setBinFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
 
   const { data: items = [], isLoading } = useQuery({
@@ -24,8 +30,24 @@ export function InventoryListPage() {
     queryKey: ["cabinets"],
     queryFn: fetchCabinets,
   });
+  const { data: allBins = [] } = useQuery({
+    queryKey: ["all-bins"],
+    queryFn: fetchAllBins,
+  });
 
-  const cabinetMap = Object.fromEntries(cabinets.map((c) => [c.id, c.name]));
+  const cabinetMap = Object.fromEntries(cabinets.map((c) => [c.id, c]));
+  const binMap = Object.fromEntries(allBins.map((b) => [b.id, b]));
+
+  // When cabinet filter changes, reset bin filter
+  const handleCabinetFilter = (val: string) => {
+    setCabinetFilter(val);
+    setBinFilter("");
+  };
+
+  // Bins available for the selected cabinet (or all bins if no cabinet selected)
+  const filteredBinOptions = cabinetFilter
+    ? allBins.filter((b) => String(b.cabinetId) === cabinetFilter)
+    : allBins;
 
   const filtered = items.filter((item) => {
     const matchSearch =
@@ -33,29 +55,32 @@ export function InventoryListPage() {
       item.name.toLowerCase().includes(search.toLowerCase()) ||
       (item.sku?.toLowerCase().includes(search.toLowerCase()) ?? false);
     const matchCabinet = !cabinetFilter || String(item.cabinetId) === cabinetFilter;
+    const matchBin = !binFilter || String(item.binId) === binFilter;
     const matchStatus =
       !statusFilter ||
       (statusFilter === "available" && item.quantityAvailable > 0) ||
       (statusFilter === "out_of_stock" && item.quantityAvailable === 0) ||
       (statusFilter === "low_stock" && item.quantityAvailable > 0 && item.quantityAvailable <= 2) ||
       (statusFilter === "consumable" && item.isConsumable);
-    return matchSearch && matchCabinet && matchStatus;
+    return matchSearch && matchCabinet && matchBin && matchStatus;
   });
 
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-bold text-slate-900">All Inventory</h1>
-        <p className="text-sm text-slate-500 mt-0.5">{items.length} items across all cabinets</p>
+        <p className="text-sm text-slate-500 mt-0.5">
+          {filtered.length} of {items.length} items
+        </p>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-2">
-        <div className="relative flex-1">
+      <div className="flex flex-col sm:flex-row gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[180px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Search by name or SKU…"
+            placeholder="Search name or SKU…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="input pl-9 w-full"
@@ -63,13 +88,23 @@ export function InventoryListPage() {
         </div>
         <select
           value={cabinetFilter}
-          onChange={(e) => setCabinetFilter(e.target.value)}
-          className="input w-full sm:w-48"
+          onChange={(e) => handleCabinetFilter(e.target.value)}
+          className="input w-full sm:w-44"
         >
           <option value="">All cabinets</option>
           {cabinets.map((c) => (
-            <option key={c.id} value={String(c.id)}>
-              {c.name}
+            <option key={c.id} value={String(c.id)}>{c.name}</option>
+          ))}
+        </select>
+        <select
+          value={binFilter}
+          onChange={(e) => setBinFilter(e.target.value)}
+          className="input w-full sm:w-40"
+        >
+          <option value="">All bins</option>
+          {filteredBinOptions.map((b) => (
+            <option key={b.id} value={String(b.id)}>
+              {b.label}{b.locationNote ? ` — ${b.locationNote}` : ""}
             </option>
           ))}
         </select>
@@ -98,7 +133,7 @@ export function InventoryListPage() {
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="px-4 py-3 text-left font-medium text-slate-600">Name</th>
-                <th className="px-4 py-3 text-left font-medium text-slate-600 hidden sm:table-cell">Cabinet</th>
+                <th className="px-4 py-3 text-left font-medium text-slate-600 hidden sm:table-cell">Location</th>
                 <th className="px-4 py-3 text-left font-medium text-slate-600 hidden md:table-cell">SKU</th>
                 <th className="px-4 py-3 text-right font-medium text-slate-600">Stock</th>
                 <th className="px-4 py-3 text-left font-medium text-slate-600 hidden sm:table-cell">Type</th>
@@ -108,6 +143,13 @@ export function InventoryListPage() {
               {filtered.map((item) => {
                 const isLow = item.quantityAvailable > 0 && item.quantityAvailable <= 2;
                 const isOut = item.quantityAvailable === 0;
+                const cabinet = cabinetMap[item.cabinetId];
+                const bin = item.binId ? binMap[item.binId] : null;
+
+                const locationLabel = bin
+                  ? `${cabinet?.name ?? `Cabinet ${item.cabinetId}`} / ${bin.label}`
+                  : cabinet?.name ?? `Cabinet ${item.cabinetId}`;
+
                 return (
                   <tr key={item.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-3">
@@ -117,12 +159,11 @@ export function InventoryListPage() {
                       >
                         {item.name}
                       </Link>
-                      {item.binId && (
-                        <span className="ml-2 text-xs text-slate-400">bin</span>
-                      )}
+                      {/* Show location inline on mobile */}
+                      <p className="sm:hidden text-xs text-slate-400 mt-0.5">{locationLabel}</p>
                     </td>
                     <td className="px-4 py-3 text-slate-600 hidden sm:table-cell">
-                      {cabinetMap[item.cabinetId] ?? `Cabinet ${item.cabinetId}`}
+                      {locationLabel}
                     </td>
                     <td className="px-4 py-3 text-slate-400 hidden md:table-cell">
                       {item.sku ?? "—"}

@@ -14,17 +14,29 @@ export interface InventoryStatusReport {
   overdueCount: number;
 }
 
+export interface ItemPurchaseSummary {
+  itemId: number;
+  itemName: string;
+  cabinetId: number;
+  totalPurchased: number;
+  totalPurchaseCost: number | null;
+}
+
+export interface ItemUsageSummary {
+  itemId: number;
+  itemName: string;
+  cabinetId: number;
+  totalUsed: number;
+  totalCost: number | null;
+}
+
 export interface ExpenseReport {
   periodStart: string;
   periodEnd: string;
-  totalSpend: number;
-  byItem: {
-    itemId: number;
-    itemName: string;
-    cabinetId: number;
-    totalUsed: number;
-    totalCost: number | null;
-  }[];
+  totalPurchaseSpend: number;
+  totalUsageCost: number;
+  byPurchase: ItemPurchaseSummary[];
+  byUsage: ItemUsageSummary[];
 }
 
 export async function getInventoryStatus(): Promise<InventoryStatusReport> {

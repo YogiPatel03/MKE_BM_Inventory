@@ -31,6 +31,8 @@ export async function createItem(payload: {
   binId?: number;
   sku?: string;
   condition?: string;
+  isConsumable?: boolean;
+  unitPrice?: number;
 }): Promise<Item> {
   const { data } = await apiClient.post<Item>("/items", {
     name: payload.name,
@@ -40,6 +42,8 @@ export async function createItem(payload: {
     bin_id: payload.binId,
     sku: payload.sku,
     condition: payload.condition,
+    is_consumable: payload.isConsumable ?? false,
+    unit_price: payload.unitPrice,
   });
   return data;
 }

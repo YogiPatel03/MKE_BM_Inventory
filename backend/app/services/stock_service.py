@@ -7,7 +7,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, TransactionConflictError
 from app.models.item import Item
 from app.models.stock_adjustment import StockAdjustment
 
@@ -39,12 +39,12 @@ async def adjust_stock(
     new_available = item.quantity_available + delta
 
     if new_total < 0:
-        raise ValueError(
+        raise TransactionConflictError(
             f"Adjustment would set quantity_total to {new_total}. "
             f"Reduce delta to at most {item.quantity_total}."
         )
     if new_available < 0:
-        raise ValueError(
+        raise TransactionConflictError(
             f"Adjustment would set quantity_available to {new_available}. "
             f"{abs(new_available)} units are currently checked out."
         )

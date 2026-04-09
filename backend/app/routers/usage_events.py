@@ -1,7 +1,11 @@
+from typing import List
+
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user as get_current_active_user, get_db
+from app.models.usage_event import UsageEvent
 from app.models.user import User
 from app.schemas.usage_event import UsageEventCreate, UsageEventOut
 from app.services.usage_service import mark_as_used
@@ -26,3 +30,18 @@ async def create_usage_event(
     await db.commit()
     await db.refresh(event)
     return event
+
+
+@router.get("/item/{item_id}", response_model=List[UsageEventOut])
+async def list_usage_events_for_item(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+):
+    result = await db.execute(
+        select(UsageEvent)
+        .where(UsageEvent.item_id == item_id)
+        .order_by(UsageEvent.used_at.desc())
+        .limit(100)
+    )
+    return result.scalars().all()

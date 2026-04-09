@@ -10,7 +10,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import InsufficientStockError, NotFoundError
+from app.core.exceptions import InsufficientStockError, NotFoundError, TransactionConflictError
 from app.models.item import Item
 from app.models.usage_event import UsageEvent
 
@@ -34,7 +34,9 @@ async def mark_as_used(
         raise NotFoundError("Item", item_id)
 
     if not item.is_consumable:
-        raise ValueError(f"Item {item_id} is not consumable. Use checkout/return instead.")
+        raise TransactionConflictError(
+            f"Item '{item.name}' is not consumable. Use checkout/return instead."
+        )
 
     if item.quantity_available < quantity_used:
         raise InsufficientStockError(item.name, quantity_used, item.quantity_available)
