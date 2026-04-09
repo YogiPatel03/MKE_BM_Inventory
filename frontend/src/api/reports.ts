@@ -44,9 +44,13 @@ export async function getInventoryStatus(): Promise<InventoryStatusReport> {
   return data;
 }
 
-export async function getExpenseReport(start?: string, end?: string): Promise<ExpenseReport> {
+export async function getExpenseReport(
+  start?: string,
+  end?: string,
+  itemId?: number | null,
+): Promise<ExpenseReport> {
   const { data } = await apiClient.get("/reports/expenses", {
-    params: { start, end },
+    params: { start, end, item_id: itemId ?? undefined },
   });
   return data;
 }

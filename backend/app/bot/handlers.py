@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
+from app.models.receipt_record import ReceiptRecord
 from app.models.transaction import Transaction, TransactionStatus
 from app.models.transaction_photo import TransactionPhoto
 from app.models.user import User
@@ -34,9 +35,11 @@ async def handle_update(body: dict[str, Any], db: AsyncSession) -> None:
     chat_id = str(message["chat"]["id"])
     text: str = message.get("text", "")
 
-    # Photo reply: record condition photo for a return
+    # Photo reply: could be a return condition photo or a receipt photo
     if message.get("photo") and message.get("reply_to_message"):
-        await handle_photo_reply(message, chat_id, db)
+        handled = await handle_receipt_photo_reply(message, chat_id, db)
+        if not handled:
+            await handle_photo_reply(message, chat_id, db)
         return
 
     if not text.startswith("/"):
@@ -129,6 +132,60 @@ async def handle_photo_reply(message: dict[str, Any], chat_id: str, db: AsyncSes
         f"📷 Photo recorded for return #{transaction.id}. Thanks!",
     )
     log.info("Photo recorded for transaction %d from file_id %s", transaction.id, file_id)
+
+
+async def handle_receipt_photo_reply(
+    message: dict[str, Any], chat_id: str, db: AsyncSession
+) -> bool:
+    """
+    Records a receipt photo when someone replies to the bot's purchase receipt-request message.
+    Matches reply_to_message.message_id against ReceiptRecord.telegram_request_message_id.
+    Returns True if a matching receipt record was found and updated, False otherwise.
+    """
+    reply_to = message["reply_to_message"]
+    reply_message_id = str(reply_to.get("message_id", ""))
+
+    if not reply_message_id:
+        return False
+
+    # Only process replies in the coordinator channel
+    if settings.telegram_coordinator_chat_id and chat_id != settings.telegram_coordinator_chat_id:
+        return False
+
+    result = await db.execute(
+        select(ReceiptRecord).where(
+            ReceiptRecord.telegram_request_message_id == reply_message_id,
+            ReceiptRecord.telegram_file_id.is_(None),  # not yet fulfilled
+        )
+    )
+    receipt = result.scalar_one_or_none()
+
+    if not receipt:
+        return False
+
+    # Pick the largest photo size
+    photos = message["photo"]
+    best_photo = max(photos, key=lambda p: p.get("file_size", 0))
+    file_id = best_photo["file_id"]
+
+    receipt.telegram_file_id = file_id
+    receipt.uploaded_via = "telegram"
+    receipt.notes = message.get("caption") or receipt.notes
+
+    # Look up sender for attribution
+    sender_tg_id = str(message["from"]["id"])
+    user_result = await db.execute(
+        select(User).where(User.telegram_chat_id == sender_tg_id)
+    )
+    sender = user_result.scalar_one_or_none()
+    if sender and not receipt.uploaded_by_user_id:
+        receipt.uploaded_by_user_id = sender.id
+
+    await db.commit()
+
+    await _send(chat_id, f"📄 Receipt recorded (#{receipt.id}). Thanks!")
+    log.info("Receipt photo recorded for receipt_record %d from file_id %s", receipt.id, file_id)
+    return True
 
 
 async def _send(chat_id: str, text: str) -> None:

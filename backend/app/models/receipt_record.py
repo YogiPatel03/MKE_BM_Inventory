@@ -46,6 +46,8 @@ class ReceiptRecord(Base):
     telegram_request_message_id: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True
     )
+    # Telegram file_id of the receipt photo once received
+    telegram_file_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, TrendingDown, Package, BarChart2 } from "lucide-react";
 import { getInventoryStatus, getExpenseReport } from "@/api/reports";
+import { listItems } from "@/api/items";
 import { useAuthStore } from "@/store/auth";
 import { Navigate } from "react-router-dom";
 
@@ -27,6 +28,7 @@ export function ReportsPage() {
   const [startDate, setStartDate] = useState(thisMonthStart());
   const [endDate, setEndDate] = useState(today);
   const [activeTab, setActiveTab] = useState<"purchases" | "usage">("purchases");
+  const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
 
   if (!canView) return <Navigate to="/dashboard" replace />;
 
@@ -38,11 +40,17 @@ export function ReportsPage() {
     queryFn: getInventoryStatus,
   });
 
+  const { data: allItems = [] } = useQuery({
+    queryKey: ["items-for-filter"],
+    queryFn: () => listItems({ isActive: true }),
+  });
+
   const { data: expenses, isLoading: expensesLoading } = useQuery({
-    queryKey: ["report-expenses", effectiveStart, effectiveEnd],
+    queryKey: ["report-expenses", effectiveStart, effectiveEnd, selectedItemId],
     queryFn: () => getExpenseReport(
       new Date(effectiveStart).toISOString(),
-      new Date(effectiveEnd + "T23:59:59").toISOString()
+      new Date(effectiveEnd + "T23:59:59").toISOString(),
+      selectedItemId,
     ),
   });
 
@@ -155,6 +163,21 @@ export function ReportsPage() {
             {new Date(expenses.periodEnd).toLocaleDateString()}
           </p>
         )}
+
+        {/* Item filter */}
+        <div>
+          <label className="label">Filter by item</label>
+          <select
+            className="input max-w-xs"
+            value={selectedItemId ?? ""}
+            onChange={(e) => setSelectedItemId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">All items</option>
+            {allItems.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Expense tabs */}

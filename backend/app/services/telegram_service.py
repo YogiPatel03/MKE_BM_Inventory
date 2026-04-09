@@ -151,16 +151,33 @@ async def notify_purchase_and_request_receipt(
     item_name: str,
     quantity: int,
     purchaser_name: str,
+    purchaser_tg_handle: Optional[str] = None,
+    purchaser_chat_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Ask coordinator channel for a receipt after a purchase is logged."""
-    if not settings.telegram_coordinator_chat_id:
-        return None
+    """
+    Notify coordinator channel of a new purchase and ask for a receipt.
+    Also DMs the purchaser directly if their Telegram is linked.
+    Returns the coordinator channel message_id (used to match photo replies).
+    """
+    user_display = f"@{purchaser_tg_handle}" if purchaser_tg_handle else purchaser_name
 
-    text = (
+    group_text = (
         f"🛒 <b>Purchase logged</b> #{purchase_id}\n"
         f"Item: <b>{item_name}</b> × {quantity}\n"
-        f"By: {purchaser_name}\n\n"
-        f"📄 Please reply to this message with a receipt photo or scan."
+        f"By: {user_display}\n\n"
+        f"📄 {user_display}, please reply to this message with a receipt photo or scan."
     )
-    message_id = await _send(settings.telegram_coordinator_chat_id, text)
+
+    message_id: Optional[int] = None
+    if settings.telegram_coordinator_chat_id:
+        message_id = await _send(settings.telegram_coordinator_chat_id, group_text)
+
+    # DM the purchaser so they don't miss the receipt request
+    if purchaser_chat_id:
+        dm_text = (
+            f"🛒 You just logged a purchase of <b>{item_name}</b> × {quantity} (#{purchase_id}).\n\n"
+            f"📄 Please reply to the coordinator channel message with a receipt photo or scan."
+        )
+        await _send(purchaser_chat_id, dm_text)
+
     return str(message_id) if message_id else None

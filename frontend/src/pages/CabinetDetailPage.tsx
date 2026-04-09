@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Box, Flame, FolderOpen, MapPin, Package, Plus } from "lucide-react";
+import { ArrowLeft, Box, Flame, FolderOpen, MapPin, Package, Plus, QrCode } from "lucide-react";
 import { getCabinet, listBins, listItems } from "@/api/cabinets";
 import { checkoutBin, returnBin, listBinTransactions } from "@/api/binTransactions";
 import { useAuthStore } from "@/store/auth";
 import type { Bin, BinTransaction, Item } from "@/types";
 import { CheckoutModal } from "@/components/transactions/CheckoutModal";
 import { BinModal } from "@/components/modals/BinModal";
+import { BinQRModal } from "@/components/modals/BinQRModal";
 import { ItemModal } from "@/components/modals/ItemModal";
 import { MarkAsUsedModal } from "@/components/modals/MarkAsUsedModal";
 import { MoveModal } from "@/components/modals/MoveModal";
@@ -86,6 +87,7 @@ interface BinSectionProps {
 function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn, onBinTxnChange }: BinSectionProps) {
   const qc = useQueryClient();
   const [moveOpen, setMoveOpen] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
   const [checkoutNotes, setCheckoutNotes] = useState("");
   const [returnNotes, setReturnNotes] = useState("");
   const [showCheckoutForm, setShowCheckoutForm] = useState(false);
@@ -139,6 +141,12 @@ function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn
               <MapPin className="h-3.5 w-3.5" /> Move bin
             </button>
           )}
+          <button
+            onClick={() => setQrOpen(true)}
+            className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1"
+          >
+            <QrCode className="h-3.5 w-3.5" /> QR
+          </button>
           {canProcess && !isCheckedOut && hasItems && !showCheckoutForm && (
             <button
               onClick={() => setShowCheckoutForm(true)}
@@ -229,6 +237,7 @@ function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn
           onClose={() => setMoveOpen(false)}
         />
       )}
+      {qrOpen && <BinQRModal bin={bin} onClose={() => setQrOpen(false)} />}
     </div>
   );
 }
