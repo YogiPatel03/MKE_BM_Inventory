@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Edit2, Flame, MapPin, RotateCcw, Scale } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useParams, Link, useNavigate } from "react-router-dom";
+import { ArrowLeft, Edit2, Flame, Inbox, MapPin, RotateCcw, Scale } from "lucide-react";
 import { getItem, updateItem } from "@/api/items";
 import { listTransactions } from "@/api/transactions";
+import { submitRequest } from "@/api/requests";
 import { apiClient } from "@/api/client";
 import { CheckoutModal } from "@/components/transactions/CheckoutModal";
 import { TransactionRow } from "@/components/transactions/TransactionRow";
@@ -124,7 +125,9 @@ export function ItemDetailPage() {
   const itemId = Number(id);
   const user = useAuthStore((s) => s.user);
   const canManage = user?.role.canManageInventory;
+  const canProcess = user?.role.canProcessAnyTransaction || user?.role.canManageUsers;
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [markUsedOpen, setMarkUsedOpen] = useState(false);
@@ -132,6 +135,7 @@ export function ItemDetailPage() {
   const [moveOpen, setMoveOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [reversingId, setReversingId] = useState<number | null>(null);
+  const [requestLoading, setRequestLoading] = useState(false);
 
   const { data: item, isLoading } = useQuery({
     queryKey: ["item", itemId],
@@ -160,6 +164,25 @@ export function ItemDetailPage() {
     queryFn: () => fetchBins(item!.cabinetId),
     enabled: !!item,
   });
+
+  const handleRequest = async () => {
+    if (!item) return;
+    const reason = window.prompt("Reason for request (optional):");
+    if (reason === null) return; // user cancelled
+    setRequestLoading(true);
+    try {
+      await submitRequest({
+        itemId: item.id,
+        quantityRequested: 1,
+        reason: reason || undefined,
+      });
+      navigate("/requests");
+    } catch (e: any) {
+      alert(e?.response?.data?.detail ?? "Failed to submit request");
+    } finally {
+      setRequestLoading(false);
+    }
+  };
 
   const handleReverse = async (eventId: number) => {
     if (!confirm("Reverse this usage event? This will restore the consumed stock.")) return;
@@ -227,10 +250,32 @@ export function ItemDetailPage() {
                 Mark as used
               </button>
             )}
-            {/* Non-consumable, not in a bin: checkout */}
+            {/* Non-consumable, not in a bin: checkout (for those who can process) or request */}
             {!item.isConsumable && !isInBin && item.quantityAvailable > 0 && (
-              <button onClick={() => setCheckoutOpen(true)} className="btn-primary">
-                Check out
+              canProcess ? (
+                <button onClick={() => setCheckoutOpen(true)} className="btn-primary">
+                  Check out
+                </button>
+              ) : (
+                <button
+                  onClick={handleRequest}
+                  disabled={requestLoading}
+                  className="btn-primary"
+                >
+                  <Inbox className="h-4 w-4" />
+                  {requestLoading ? "Submitting…" : "Request checkout"}
+                </button>
+              )
+            )}
+            {/* Consumable: users can also request (for controlled consumables) */}
+            {item.isConsumable && !canProcess && item.quantityAvailable > 0 && (
+              <button
+                onClick={handleRequest}
+                disabled={requestLoading}
+                className="btn-secondary"
+              >
+                <Inbox className="h-4 w-4" />
+                {requestLoading ? "Submitting…" : "Request"}
               </button>
             )}
             {/* In bin: show info only */}

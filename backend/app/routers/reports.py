@@ -1,5 +1,5 @@
 """
-Reports router — inventory status and expense/usage summaries.
+Reports router — inventory status, expense/usage summaries, and held-value.
 """
 
 from datetime import datetime, timezone
@@ -11,13 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user as get_current_active_user, get_db
 from app.core.permissions import require_manage_inventory
+from app.models.cabinet import Cabinet
 from app.models.item import Item
 from app.models.purchase_record import PurchaseRecord
+from app.models.room import Room
 from app.models.transaction import Transaction, TransactionStatus
 from app.models.usage_event import UsageEvent
 from app.models.user import User
 from app.schemas.report import (
     ExpenseReport,
+    HeldValueByCabinet,
+    HeldValueByRoom,
+    HeldValueItem,
+    HeldValueReport,
     InventoryStatusReport,
     ItemPurchaseSummary,
     ItemUsageSummary,
@@ -205,4 +211,96 @@ async def expense_report(
         total_usage_cost=total_usage_cost,
         by_purchase=list(by_purchase.values()),
         by_usage=list(by_usage.values()),
+    )
+
+
+@router.get("/held-value", response_model=HeldValueReport)
+async def held_value_report(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Current held inventory value report.
+
+    Value = unit_price × quantity_total for each active item.
+    Checked-out non-consumables STILL count toward held value because the
+    organisation still owns them — value only decreases when quantity_total
+    is reduced (loss / damage write-off / stock adjustment).
+    """
+    require_manage_inventory(current_user)
+
+    # Fetch all active items joined with their cabinet and room
+    rows = (
+        await db.execute(
+            select(Item, Cabinet, Room)
+            .join(Cabinet, Item.cabinet_id == Cabinet.id)
+            .join(Room, Cabinet.room_id == Room.id)
+            .where(Item.is_active == True)
+            .order_by(Room.name, Cabinet.name, Item.name)
+        )
+    ).all()
+
+    items_out: list[HeldValueItem] = []
+    by_cabinet: dict[int, HeldValueByCabinet] = {}
+    by_room: dict[int, HeldValueByRoom] = {}
+    total_held_value = 0.0
+
+    for item, cabinet, room in rows:
+        unit_price = float(item.unit_price) if item.unit_price is not None else 0.0
+        held_value = unit_price * item.quantity_total
+        total_held_value += held_value
+
+        items_out.append(HeldValueItem(
+            item_id=item.id,
+            item_name=item.name,
+            cabinet_id=cabinet.id,
+            cabinet_name=cabinet.name,
+            room_id=room.id,
+            room_name=room.name,
+            bin_id=item.bin_id,
+            quantity_total=item.quantity_total,
+            quantity_available=item.quantity_available,
+            unit_price=unit_price or None,
+            held_value=held_value,
+        ))
+
+        # Aggregate by cabinet
+        if cabinet.id not in by_cabinet:
+            by_cabinet[cabinet.id] = HeldValueByCabinet(
+                cabinet_id=cabinet.id,
+                cabinet_name=cabinet.name,
+                room_id=room.id,
+                room_name=room.name,
+                total_value=0.0,
+                item_count=0,
+            )
+        by_cabinet[cabinet.id].total_value += held_value
+        by_cabinet[cabinet.id].item_count += 1
+
+        # Aggregate by room
+        if room.id not in by_room:
+            by_room[room.id] = HeldValueByRoom(
+                room_id=room.id,
+                room_name=room.name,
+                total_value=0.0,
+                cabinet_count=0,
+                item_count=0,
+            )
+        by_room[room.id].total_value += held_value
+        by_room[room.id].item_count += 1
+        if cabinet.id not in {c.cabinet_id for c in by_cabinet.values() if c.room_id == room.id and c.total_value > 0}:
+            pass  # cabinet count computed below
+
+    # Count distinct cabinets per room
+    for room_entry in by_room.values():
+        room_entry.cabinet_count = sum(
+            1 for c in by_cabinet.values() if c.room_id == room_entry.room_id
+        )
+
+    return HeldValueReport(
+        total_held_value=round(total_held_value, 2),
+        total_items=len(items_out),
+        by_room=sorted(by_room.values(), key=lambda r: r.room_name),
+        by_cabinet=sorted(by_cabinet.values(), key=lambda c: c.cabinet_name),
+        items=items_out,
     )

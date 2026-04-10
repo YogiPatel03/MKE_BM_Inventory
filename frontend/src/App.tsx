@@ -4,6 +4,8 @@ import { useAuthStore } from "@/store/auth";
 import { AppShell } from "@/components/layout/AppShell";
 import { LoginPage } from "@/pages/LoginPage";
 import { DashboardPage } from "@/pages/DashboardPage";
+import { RoomsPage } from "@/pages/RoomsPage";
+import { RoomDetailPage } from "@/pages/RoomDetailPage";
 import { InventoryPage } from "@/pages/InventoryPage";
 import { CabinetDetailPage } from "@/pages/CabinetDetailPage";
 import { ItemDetailPage } from "@/pages/ItemDetailPage";
@@ -14,6 +16,7 @@ import { InventoryListPage } from "@/pages/InventoryListPage";
 import { RequestsPage } from "@/pages/RequestsPage";
 import { ReportsPage } from "@/pages/ReportsPage";
 import { QRScanPage } from "@/pages/QRScanPage";
+import { ChecklistPage } from "@/pages/ChecklistPage";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user);
@@ -52,15 +55,22 @@ export default function App() {
         >
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
+
+          {/* Rooms & Cabinets */}
+          <Route path="rooms" element={<RoomsPage />} />
+          <Route path="rooms/:id" element={<RoomDetailPage />} />
+          {/* /inventory redirects to /rooms for backwards compat */}
           <Route path="inventory" element={<InventoryPage />} />
           <Route path="inventory/cabinets/:id" element={<CabinetDetailPage />} />
           <Route path="inventory/items/:id" element={<ItemDetailPage />} />
+
+          <Route path="inventory-list" element={<InventoryListPage />} />
           <Route path="transactions" element={<TransactionsPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="settings" element={<SettingsPage />} />
-          <Route path="inventory-list" element={<InventoryListPage />} />
           <Route path="requests" element={<RequestsPage />} />
           <Route path="reports" element={<ReportsPage />} />
+          <Route path="checklist" element={<ChecklistPage />} />
           <Route path="qr/:token" element={<QRScanPage />} />
         </Route>
       </Routes>

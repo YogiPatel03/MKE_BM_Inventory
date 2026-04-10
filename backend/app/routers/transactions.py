@@ -14,6 +14,10 @@ from app.schemas.transaction import (
     TransactionOut,
 )
 from app.services import telegram_service
+from app.services.checklist_service import (
+    add_return_task_for_transaction,
+    auto_complete_return_task_for_transaction,
+)
 from app.services.transaction_service import (
     cancel_transaction,
     checkout_item,
@@ -72,6 +76,14 @@ async def checkout(
         due_at=body.due_at,
         notes=body.notes,
     )
+    # Auto-create return task on the borrower's group checklist
+    from sqlalchemy import select as sa_select
+    from app.models.user import User as UserModel
+    borrower_result = await db.execute(sa_select(UserModel).where(UserModel.id == body.user_id))
+    borrower = borrower_result.scalar_one_or_none()
+    if borrower:
+        await add_return_task_for_transaction(db, transaction, borrower)
+
     await db.commit()
 
     # Load relationships for notification
@@ -109,6 +121,10 @@ async def return_transaction(
         notes=body.notes,
         requesting_user_id=current_user.id,
     )
+
+    # Auto-complete the corresponding checklist return task
+    await auto_complete_return_task_for_transaction(db, transaction_id, current_user.id)
+
     await db.commit()
 
     await db.refresh(transaction, ["item", "user"])

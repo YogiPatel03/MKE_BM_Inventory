@@ -10,6 +10,10 @@ from app.models.bin_transaction import BinTransaction
 from app.models.user import User
 from app.schemas.bin_transaction import BinTransactionCreate, BinTransactionOut, BinTransactionReturn
 from app.services.bin_transaction_service import checkout_bin, return_bin
+from app.services.checklist_service import (
+    add_return_task_for_bin_transaction,
+    auto_complete_return_task_for_bin,
+)
 
 router = APIRouter(prefix="/bin-transactions", tags=["bin-transactions"])
 
@@ -29,6 +33,10 @@ async def checkout_bin_endpoint(
         due_at=body.due_at,
         notes=body.notes,
     )
+
+    # Auto-create return task on the user's group checklist
+    await add_return_task_for_bin_transaction(db, bin_txn, current_user)
+
     await db.commit()
     await db.refresh(bin_txn)
     return bin_txn
@@ -48,6 +56,10 @@ async def return_bin_endpoint(
         processed_by_user_id=current_user.id,
         notes=body.notes,
     )
+
+    # Auto-complete the corresponding checklist return task
+    await auto_complete_return_task_for_bin(db, bin_transaction_id, current_user.id)
+
     await db.commit()
     await db.refresh(bin_txn)
     return bin_txn

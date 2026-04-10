@@ -20,7 +20,11 @@ from app.services.request_service import (
     create_request,
     deny_request,
 )
-from app.services.telegram_service import notify_new_request
+from app.services.telegram_service import (
+    notify_new_request,
+    notify_request_approved,
+    notify_request_denied,
+)
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 
@@ -104,6 +108,27 @@ async def approve(
     )
     await db.commit()
     await db.refresh(req)
+
+    # Notify requester via Telegram DM
+    from sqlalchemy import select
+    from app.models.user import User as UserModel
+    from app.models.item import Item
+    from app.models.bin import Bin
+    requester = (await db.execute(
+        select(UserModel).where(UserModel.id == req.requester_id)
+    )).scalar_one_or_none()
+    if requester and requester.telegram_chat_id:
+        target_name = "unknown item"
+        if req.item_id:
+            item = (await db.execute(select(Item).where(Item.id == req.item_id))).scalar_one_or_none()
+            if item:
+                target_name = item.name
+        elif req.bin_id:
+            bin_obj = (await db.execute(select(Bin).where(Bin.id == req.bin_id))).scalar_one_or_none()
+            if bin_obj:
+                target_name = f"Bin: {bin_obj.label}"
+        await notify_request_approved(requester.telegram_chat_id, target_name, req.id)
+
     return req
 
 
@@ -123,6 +148,27 @@ async def deny(
     )
     await db.commit()
     await db.refresh(req)
+
+    # Notify requester via Telegram DM
+    from sqlalchemy import select
+    from app.models.user import User as UserModel
+    from app.models.item import Item
+    from app.models.bin import Bin
+    requester = (await db.execute(
+        select(UserModel).where(UserModel.id == req.requester_id)
+    )).scalar_one_or_none()
+    if requester and requester.telegram_chat_id:
+        target_name = "unknown item"
+        if req.item_id:
+            item = (await db.execute(select(Item).where(Item.id == req.item_id))).scalar_one_or_none()
+            if item:
+                target_name = item.name
+        elif req.bin_id:
+            bin_obj = (await db.execute(select(Bin).where(Bin.id == req.bin_id))).scalar_one_or_none()
+            if bin_obj:
+                target_name = f"Bin: {bin_obj.label}"
+        await notify_request_denied(requester.telegram_chat_id, target_name, req.id, body.denial_reason)
+
     return req
 
 

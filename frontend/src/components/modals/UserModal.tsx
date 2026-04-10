@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { KeyRound, X } from "lucide-react";
 import { createUser, updateUser, resetUserPassword } from "@/api/auth";
-import type { User } from "@/types";
+import type { User, GroupName } from "@/types";
+import { GROUP_DISPLAY, GROUP_NAMES } from "@/types";
 
 const ROLES = [
   { id: 1, name: "ADMIN" },
@@ -26,6 +27,9 @@ export function UserModal({ user: editUser, onClose }: Props) {
   const [roleId, setRoleId] = useState(editUser?.roleId ?? 4);
   const [telegramHandle, setTelegramHandle] = useState(editUser?.telegramHandle ?? "");
   const [isActive, setIsActive] = useState(editUser?.isActive ?? true);
+  const [groupName, setGroupName] = useState<GroupName | "">(
+    (editUser?.groupName as GroupName | null) ?? ""
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -47,6 +51,7 @@ export function UserModal({ user: editUser, onClose }: Props) {
           roleId,
           telegramHandle: telegramHandle || undefined,
           isActive,
+          groupName: groupName || null,
         });
       } else {
         await createUser({
@@ -55,6 +60,7 @@ export function UserModal({ user: editUser, onClose }: Props) {
           password,
           roleId,
           telegramHandle: telegramHandle || undefined,
+          groupName: groupName || null,
         });
       }
       qc.invalidateQueries({ queryKey: ["users"] });
@@ -147,6 +153,22 @@ export function UserModal({ user: editUser, onClose }: Props) {
               value={telegramHandle}
               onChange={(e) => setTelegramHandle(e.target.value.replace(/^@/, ""))}
             />
+          </div>
+          <div>
+            <label className="label">Group</label>
+            <select
+              className="input"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value as GroupName | "")}
+            >
+              <option value="">— No group —</option>
+              {GROUP_NAMES.map((g) => (
+                <option key={g} value={g}>{GROUP_DISPLAY[g]}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-slate-500">
+              Determines which weekly checklist checkout tasks appear on.
+            </p>
           </div>
           {isEdit && (
             <div className="flex items-center gap-3">

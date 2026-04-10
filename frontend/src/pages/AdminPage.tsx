@@ -5,6 +5,7 @@ import { apiClient } from "@/api/client";
 import { useAuthStore } from "@/store/auth";
 import { Navigate } from "react-router-dom";
 import type { User } from "@/types";
+import { GROUP_DISPLAY } from "@/types";
 import { UserModal } from "@/components/modals/UserModal";
 
 async function listUsers(): Promise<User[]> {
@@ -64,6 +65,7 @@ export function AdminPage() {
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Name</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Username</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Role</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Group</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Telegram</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Status</th>
                 <th className="px-4 py-3" />
@@ -72,7 +74,7 @@ export function AdminPage() {
             <tbody className="divide-y divide-slate-100">
               {isLoading ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-sm text-slate-400">
+                  <td colSpan={7} className="py-8 text-center text-sm text-slate-400">
                     Loading…
                   </td>
                 </tr>
@@ -83,6 +85,13 @@ export function AdminPage() {
                     <td className="px-4 py-3 text-sm text-slate-500">{u.username}</td>
                     <td className="px-4 py-3">
                       <RoleBadge roleName={u.role.name} />
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-500">
+                      {u.groupName ? (
+                        <span className="badge-blue">{GROUP_DISPLAY[u.groupName as keyof typeof GROUP_DISPLAY] ?? u.groupName}</span>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-sm text-slate-500">
                       {u.telegramHandle ? (

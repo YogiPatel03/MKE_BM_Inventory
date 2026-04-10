@@ -30,6 +30,7 @@ class UserOut(BaseModel):
     role_id: int
     role: RoleOut
     is_active: bool
+    group_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -40,6 +41,7 @@ class UserCreate(BaseModel):
     password: str
     role_id: int
     telegram_handle: Optional[str] = None
+    group_name: Optional[str] = None
 
     @field_validator("username")
     @classmethod
@@ -60,6 +62,7 @@ class UserUpdate(BaseModel):
     telegram_handle: Optional[str] = None
     role_id: Optional[int] = None
     is_active: Optional[bool] = None
+    group_name: Optional[str] = None
 
     @field_validator("username")
     @classmethod

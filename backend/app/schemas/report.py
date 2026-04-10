@@ -31,15 +31,6 @@ class ExpenseReport(BaseModel):
     by_purchase: List[ItemPurchaseSummary]  # restocking view
     by_usage: List[ItemUsageSummary]       # consumption view
 
-    # Legacy alias so existing frontend field still works
-    @property
-    def total_spend(self) -> float:
-        return self.total_purchase_spend
-
-    @property
-    def by_item(self) -> List[ItemUsageSummary]:
-        return self.by_usage
-
 
 class LowStockItem(BaseModel):
     item_id: int
@@ -64,3 +55,44 @@ class InventoryStatusReport(BaseModel):
     out_of_stock_items: List[OutOfStockItem]
     checked_out_count: int
     overdue_count: int
+
+
+# ── Held-value report ─────────────────────────────────────────────────────────
+
+class HeldValueItem(BaseModel):
+    item_id: int
+    item_name: str
+    cabinet_id: int
+    cabinet_name: str
+    room_id: int
+    room_name: str
+    bin_id: Optional[int] = None
+    quantity_total: int
+    quantity_available: int
+    unit_price: Optional[float] = None
+    held_value: float  # unit_price * quantity_total
+
+
+class HeldValueByCabinet(BaseModel):
+    cabinet_id: int
+    cabinet_name: str
+    room_id: int
+    room_name: str
+    total_value: float
+    item_count: int
+
+
+class HeldValueByRoom(BaseModel):
+    room_id: int
+    room_name: str
+    total_value: float
+    cabinet_count: int
+    item_count: int
+
+
+class HeldValueReport(BaseModel):
+    total_held_value: float
+    total_items: int
+    by_room: List[HeldValueByRoom]
+    by_cabinet: List[HeldValueByCabinet]
+    items: List[HeldValueItem]

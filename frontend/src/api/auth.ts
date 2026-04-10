@@ -22,6 +22,7 @@ export async function createUser(payload: {
   password: string;
   roleId: number;
   telegramHandle?: string;
+  groupName?: string | null;
 }): Promise<User> {
   const { data } = await apiClient.post<User>("/users", {
     full_name: payload.fullName,
@@ -29,13 +30,14 @@ export async function createUser(payload: {
     password: payload.password,
     role_id: payload.roleId,
     telegram_handle: payload.telegramHandle || null,
+    group_name: payload.groupName ?? null,
   });
   return data;
 }
 
 export async function updateUser(
   userId: number,
-  payload: { fullName?: string; username?: string; roleId?: number; telegramHandle?: string; isActive?: boolean }
+  payload: { fullName?: string; username?: string; roleId?: number; telegramHandle?: string; isActive?: boolean; groupName?: string | null }
 ): Promise<User> {
   const { data } = await apiClient.patch<User>(`/users/${userId}`, {
     full_name: payload.fullName,
@@ -43,6 +45,7 @@ export async function updateUser(
     role_id: payload.roleId,
     telegram_handle: payload.telegramHandle,
     is_active: payload.isActive,
+    group_name: payload.groupName,
   });
   return data;
 }

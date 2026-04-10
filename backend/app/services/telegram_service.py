@@ -8,13 +8,17 @@ telegram_chat_id is linked.
 """
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from telegram import Bot
 from telegram.error import TelegramError
 
 from app.config import settings
 from app.models.transaction import Transaction
+
+if TYPE_CHECKING:
+    from app.models.checklist import ChecklistItem
+    from app.models.user import User
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +160,44 @@ async def notify_low_stock(item_name: str, quantity_available: int, threshold: i
         f"Remaining: {quantity_available} (threshold: {threshold})\n"
         f"Location: {location}\n\n"
         f"Consider restocking soon."
+    )
+    await _send(settings.telegram_coordinator_chat_id, text)
+
+
+async def notify_request_approved(requester_chat_id: str, item_name: str, request_id: int) -> None:
+    """DM the requester when their checkout request is approved."""
+    text = (
+        f"✅ <b>Request approved!</b>\n"
+        f"Your request #{request_id} for <b>{item_name}</b> has been approved and fulfilled.\n"
+        f"Please collect the item promptly."
+    )
+    await _send(requester_chat_id, text)
+
+
+async def notify_request_denied(requester_chat_id: str, item_name: str, request_id: int, reason: str | None) -> None:
+    """DM the requester when their checkout request is denied."""
+    reason_text = f"\nReason: {reason}" if reason else ""
+    text = (
+        f"❌ <b>Request denied</b>\n"
+        f"Your request #{request_id} for <b>{item_name}</b> was denied.{reason_text}"
+    )
+    await _send(requester_chat_id, text)
+
+
+async def notify_checklist_return_proof(task: "ChecklistItem", completer: "User") -> None:
+    """
+    Request a return proof photo in the coordinator group chat when a
+    checklist return task is completed.
+    """
+    if not settings.telegram_coordinator_chat_id:
+        return
+
+    user_display = f"@{completer.telegram_handle}" if completer.telegram_handle else completer.full_name
+    text = (
+        f"📋 <b>Checklist return task completed</b>\n"
+        f"Task: <b>{task.title}</b>\n"
+        f"Completed by: {user_display}\n\n"
+        f"📷 {user_display}, please reply to this message with a photo confirming the return."
     )
     await _send(settings.telegram_coordinator_chat_id, text)
 

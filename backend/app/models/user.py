@@ -42,6 +42,9 @@ class User(Base):
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # Team/group membership for weekly checklists
+    group_name: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

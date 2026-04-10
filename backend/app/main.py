@@ -15,12 +15,14 @@ from app.routers import (
     bin_transactions,
     bins,
     cabinets,
+    checklists,
     inventory_requests,
     items,
     moves,
     purchases,
     qr,
     reports,
+    rooms,
     stock_adjustments,
     telegram_webhook,
     transactions,
@@ -64,10 +66,31 @@ async def _run_overdue_check() -> None:
                 await notify_overdue(t)
 
 
+async def _run_weekly_checklist_generation() -> None:
+    """Auto-generate weekly checklists every Monday morning."""
+    from app.services.checklist_service import get_or_create_weekly_checklists
+
+    async with AsyncSessionLocal() as db:
+        checklists = await get_or_create_weekly_checklists(db)
+        await db.commit()
+        log.info("Weekly checklist generation: %d checklists ensured", len(checklists))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     scheduler.add_job(_run_overdue_check, "interval", hours=1, id="overdue_check")
+
+    # Monday 6am checklist generation (cron trigger)
+    scheduler.add_job(
+        _run_weekly_checklist_generation,
+        "cron",
+        day_of_week="mon",
+        hour=6,
+        minute=0,
+        id="weekly_checklist_generation",
+    )
+
     scheduler.start()
 
     # Ensure "Restock Me" cabinet exists
@@ -112,6 +135,7 @@ app.add_middleware(
 # Routers
 app.include_router(auth.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
+app.include_router(rooms.router, prefix="/api")
 app.include_router(cabinets.router, prefix="/api")
 app.include_router(bins.router, prefix="/api")
 app.include_router(items.router, prefix="/api")
@@ -125,6 +149,7 @@ app.include_router(moves.router, prefix="/api")
 app.include_router(qr.router, prefix="/api")
 app.include_router(activity.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
+app.include_router(checklists.router, prefix="/api")
 app.include_router(telegram_webhook.router, prefix="/api")
 
 

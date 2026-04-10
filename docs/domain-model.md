@@ -4,6 +4,7 @@
 
 ```
 Role (1) ────────────── (*) User
+Room (1) ────────────── (*) Cabinet
 Cabinet (1) ─────────── (*) Bin
 Cabinet (1) ─────────── (*) Item         [items directly in cabinet]
 Bin (1) ─────────────── (*) Item         [items in a bin; bin_id nullable]
@@ -20,6 +21,9 @@ ReceiptRecord (1) ────── (*) PurchaseRecord
 User (1) ────────────── (*) InventoryRequest [as requester]
 Item (1) ────────────── (*) InventoryRequest
 Bin (1) ─────────────── (*) InventoryRequest
+Checklist (1) ──────── (*) ChecklistItem
+Checklist (1) ──────── (*) ChecklistAssignment
+User (1) ────────────── (*) ChecklistAssignment
 ```
 
 ## Role
@@ -62,18 +66,33 @@ System account. Created only by ADMIN users. No self-registration.
 | telegram_chat_id | str nullable | Set when user runs /link in bot |
 | telegram_link_token | str nullable | One-time token, cleared after use |
 | role_id | FK → roles | |
+| group_name | str nullable | SHISHU_MANDAL, GROUP_1, GROUP_2, GROUP_3; determines which weekly checklist auto-return tasks appear on |
 | is_active | bool | Soft deactivation |
 | created_at, updated_at | datetime tz | |
 
-## Cabinet
+## Room
 
-Top-level physical storage unit.
+Top-level physical location grouping multiple cabinets (e.g. a store room or activity hall).
 
 | Field | Type | Notes |
 |---|---|---|
 | id | int PK | |
+| name | str | e.g. "Shishu Mandal" |
+| description | str nullable | |
+| created_at, updated_at | datetime tz | |
+
+**Children:** cabinets. Existing cabinets were migrated to a default "Shishu Mandal" room in migration 010.
+
+## Cabinet
+
+Physical storage unit belonging to a room.
+
+| Field | Type | Notes |
+|---|---|---|
+| id | int PK | |
+| room_id | FK → rooms | NOT NULL; every cabinet must belong to a room |
 | name | str | e.g. "Electronics Cabinet A" |
-| location | str nullable | e.g. "Room 204, shelf 3" |
+| location | str nullable | e.g. "shelf 3" |
 | description | str nullable | |
 | created_at, updated_at | datetime tz | |
 
@@ -277,3 +296,54 @@ A receipt image associated with a purchase. Can arrive via Telegram or web uploa
 | uploaded_at, created_at | datetime tz | |
 
 A placeholder `ReceiptRecord` is created immediately when a purchase is logged. Its `telegram_request_message_id` is set from the bot's group notification. When the purchaser replies with a photo, `telegram_file_id` is populated by the bot handler.
+
+## Checklist
+
+One per group per calendar week (Monday–Sunday). Auto-generated every Monday at 06:00 by APScheduler, or on-demand when a group member first accesses the checklist page that week.
+
+| Field | Type | Notes |
+|---|---|---|
+| id | int PK | |
+| group_name | str | SHISHU_MANDAL, GROUP_1, GROUP_2, GROUP_3 |
+| week_start | date | Monday of the week (ISO 8601) |
+| title | str | e.g. "Shishu Mandal – Week of Apr 14" |
+| created_at | datetime tz | |
+
+**Unique constraint:** `(group_name, week_start)` — exactly one checklist per group per week.
+
+## ChecklistItem
+
+A task within a weekly checklist. May be manually added or auto-generated from a checkout.
+
+| Field | Type | Notes |
+|---|---|---|
+| id | int PK | |
+| checklist_id | FK → checklists | |
+| title | str | Human-readable task description |
+| notes | str nullable | Additional context |
+| is_completed | bool | True when marked done |
+| completed_by_user_id | FK → users nullable | Who completed it |
+| completed_at | datetime tz nullable | When marked complete |
+| completion_notes | str nullable | Optional notes on completion |
+| is_auto_generated | bool | True if created from a checkout |
+| auto_type | str nullable | "item_return" or "bin_return" |
+| linked_transaction_id | FK → transactions nullable | SET NULL on delete |
+| linked_bin_transaction_id | FK → bin_transactions nullable | SET NULL on delete |
+| photo_requested_via_telegram | bool | True if bot sent a photo proof request |
+| created_at | datetime tz | |
+
+**Auto-completion:** when a linked transaction/bin_transaction is returned, the associated ChecklistItem is automatically marked complete.
+
+## ChecklistAssignment
+
+Maps a user to a checklist for that week's responsibilities.
+
+| Field | Type | Notes |
+|---|---|---|
+| id | int PK | |
+| checklist_id | FK → checklists | |
+| user_id | FK → users | |
+| assigned_by_user_id | FK → users nullable | Who assigned this |
+| assigned_at | datetime tz | |
+
+**Unique constraint:** `(checklist_id, user_id)` — each user assigned at most once per checklist.

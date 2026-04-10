@@ -50,6 +50,8 @@ export interface ExpenseReport {
   byUsage: ItemUsageSummary[];
 }
 
+import type { HeldValueReport } from "@/types";
+
 export async function getInventoryStatus(): Promise<InventoryStatusReport> {
   const { data } = await apiClient.get("/reports/inventory-status");
   return data;
@@ -63,5 +65,10 @@ export async function getExpenseReport(
   const { data } = await apiClient.get("/reports/expenses", {
     params: { start, end, item_id: itemId ?? undefined },
   });
+  return data;
+}
+
+export async function getHeldValueReport(): Promise<HeldValueReport> {
+  const { data } = await apiClient.get("/reports/held-value");
   return data;
 }

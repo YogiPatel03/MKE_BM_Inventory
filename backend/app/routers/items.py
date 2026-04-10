@@ -1,3 +1,5 @@
+import decimal
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,8 +97,11 @@ async def update_item(
     if not item:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
 
+    def _json_val(v):
+        return float(v) if isinstance(v, decimal.Decimal) else v
+
     changes = body.model_dump(exclude_none=True)
-    before = {k: getattr(item, k) for k in changes}
+    before = {k: _json_val(getattr(item, k)) for k in changes}
     was_active = item.is_active
 
     for field, value in changes.items():
@@ -113,7 +118,7 @@ async def update_item(
     else:
         activity_type = ActivityType.ITEM_EDITED
 
-    after = {k: getattr(item, k) for k in changes}
+    after = {k: _json_val(getattr(item, k)) for k in changes}
 
     await log_activity(
         db,

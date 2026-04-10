@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Box, Edit2, Flame, FolderOpen, MapPin, Package, Plus, QrCode } from "lucide-react";
+import { useParams, Link, useNavigate } from "react-router-dom";
+import { ArrowLeft, Box, Edit2, Flame, FolderOpen, Inbox, MapPin, Package, Plus, QrCode } from "lucide-react";
 import { getCabinet, listBins, listItems, updateCabinet } from "@/api/cabinets";
 import { checkoutBin, returnBin, listBinTransactions } from "@/api/binTransactions";
+import { submitRequest } from "@/api/requests";
 import { useAuthStore } from "@/store/auth";
 import type { Bin, BinTransaction, Cabinet, Item } from "@/types";
 import { CheckoutModal } from "@/components/transactions/CheckoutModal";
@@ -141,9 +142,10 @@ interface BinSectionProps {
   canProcess: boolean;
   activeBinTxn: BinTransaction | undefined;
   onBinTxnChange: () => void;
+  onRequestBin: (binId: number) => void;
 }
 
-function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn, onBinTxnChange }: BinSectionProps) {
+function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn, onBinTxnChange, onRequestBin }: BinSectionProps) {
   const qc = useQueryClient();
   const [moveOpen, setMoveOpen] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
@@ -221,6 +223,15 @@ function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn
               className="btn-secondary text-xs py-1 px-3"
             >
               Return bin
+            </button>
+          )}
+          {!canProcess && !isCheckedOut && hasItems && (
+            <button
+              onClick={() => onRequestBin(bin.id)}
+              className="btn-secondary text-xs py-1 px-3"
+            >
+              <Inbox className="h-3.5 w-3.5" />
+              Request
             </button>
           )}
         </div>
@@ -307,7 +318,8 @@ export function CabinetDetailPage() {
   const user = useAuthStore((s) => s.user);
   const canManage = user?.role.canManageInventory ?? false;
   const canProcess = user?.role.canProcessAnyTransaction || user?.role.canManageUsers || false;
-  useQueryClient(); // ensure query client available for child component mutations
+  const navigate = useNavigate();
+  useQueryClient();
 
   const { data: cabinet, isLoading: cabLoading } = useQuery({
     queryKey: ["cabinet", cabinetId],
@@ -334,6 +346,17 @@ export function CabinetDetailPage() {
     enabled: canProcess,
   });
 
+  const handleRequestBin = async (binId: number) => {
+    const reason = window.prompt("Reason for request (optional):");
+    if (reason === null) return;
+    try {
+      await submitRequest({ binId, reason: reason || undefined });
+      navigate("/requests");
+    } catch (e: any) {
+      alert(e?.response?.data?.detail ?? "Failed to submit request");
+    }
+  };
+
   // Map bin_id -> active BinTransaction
   const activeBinTxnMap = Object.fromEntries(
     binTransactions
@@ -357,11 +380,11 @@ export function CabinetDetailPage() {
       {/* Header */}
       <div>
         <Link
-          to="/inventory"
+          to={cabinet.roomId ? `/rooms/${cabinet.roomId}` : "/rooms"}
           className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 mb-3"
         >
           <ArrowLeft className="h-4 w-4" />
-          Inventory
+          Back to Room
         </Link>
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
@@ -420,6 +443,7 @@ export function CabinetDetailPage() {
           canProcess={canProcess}
           activeBinTxn={activeBinTxnMap[bin.id]}
           onBinTxnChange={() => refetchBinTxns()}
+          onRequestBin={handleRequestBin}
         />
       ))}
 

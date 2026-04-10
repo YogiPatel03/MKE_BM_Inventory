@@ -1,21 +1,19 @@
 import { NavLink, useNavigate } from "react-router-dom";
-import { Box, ClipboardList, LayoutDashboard, LogOut, PackageSearch, Settings, Shield, FileText, Inbox } from "lucide-react";
+import {
+  Box,
+  ClipboardCheck,
+  ClipboardList,
+  DoorOpen,
+  FileText,
+  Inbox,
+  LayoutDashboard,
+  LogOut,
+  PackageSearch,
+  Settings,
+  Shield,
+} from "lucide-react";
 import { useAuthStore } from "@/store/auth";
 import { clsx } from "clsx";
-
-const navItems = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/inventory", label: "Cabinets", icon: Box },
-  { to: "/inventory-list", label: "All Inventory", icon: PackageSearch },
-  { to: "/transactions", label: "Transactions", icon: ClipboardList },
-  { to: "/requests", label: "Requests", icon: Inbox },
-  { to: "/settings", label: "Settings", icon: Settings },
-];
-
-const adminItems = [
-  { to: "/admin", label: "Admin", icon: Shield },
-  { to: "/reports", label: "Reports", icon: FileText },
-];
 
 export function Sidebar() {
   const user = useAuthStore((s) => s.user);
@@ -23,11 +21,29 @@ export function Sidebar() {
   const navigate = useNavigate();
 
   const isAdmin = user?.role.canManageUsers ?? false;
+  const canManageInventory = user?.role.canManageInventory ?? false;
+  // Reports and admin-level views are shown to admins and coordinators
+  const canViewReports = isAdmin || canManageInventory;
 
   const handleLogout = () => {
     logout();
     navigate("/login");
   };
+
+  const navItems = [
+    { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { to: "/rooms", label: "Rooms", icon: DoorOpen },
+    { to: "/inventory-list", label: "All Inventory", icon: PackageSearch },
+    { to: "/transactions", label: "Transactions", icon: ClipboardList },
+    { to: "/requests", label: "Requests", icon: Inbox },
+    { to: "/checklist", label: "Checklist", icon: ClipboardCheck },
+    { to: "/settings", label: "Settings", icon: Settings },
+  ];
+
+  const privilegedItems = [
+    ...(canViewReports ? [{ to: "/reports", label: "Reports", icon: FileText }] : []),
+    ...(isAdmin ? [{ to: "/admin", label: "Admin", icon: Shield }] : []),
+  ];
 
   return (
     <aside className="hidden md:flex md:w-64 md:flex-col bg-white border-r border-slate-200">
@@ -42,7 +58,7 @@ export function Sidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {navItems.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
@@ -61,14 +77,14 @@ export function Sidebar() {
           </NavLink>
         ))}
 
-        {isAdmin && (
+        {privilegedItems.length > 0 && (
           <>
             <div className="pt-4 pb-1 px-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Admin
+                Management
               </p>
             </div>
-            {adminItems.map(({ to, label, icon: Icon }) => (
+            {privilegedItems.map(({ to, label, icon: Icon }) => (
               <NavLink
                 key={to}
                 to={to}

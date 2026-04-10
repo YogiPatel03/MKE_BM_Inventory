@@ -1,8 +1,9 @@
 import { apiClient } from "./client";
 import type { Bin, Cabinet, Item } from "@/types";
 
-export async function listCabinets(): Promise<Cabinet[]> {
-  const { data } = await apiClient.get<Cabinet[]>("/cabinets");
+export async function listCabinets(roomId?: number): Promise<Cabinet[]> {
+  const params = roomId ? { room_id: roomId } : {};
+  const { data } = await apiClient.get<Cabinet[]>("/cabinets", { params });
   return data;
 }
 
@@ -11,19 +12,36 @@ export async function getCabinet(id: number): Promise<Cabinet> {
   return data;
 }
 
-export async function createCabinet(
-  payload: Pick<Cabinet, "name" | "location" | "description">
-): Promise<Cabinet> {
-  const { data } = await apiClient.post<Cabinet>("/cabinets", payload);
+export async function createCabinet(payload: {
+  name: string;
+  roomId: number;
+  location?: string | null;
+  description?: string | null;
+}): Promise<Cabinet> {
+  const { data } = await apiClient.post<Cabinet>("/cabinets", {
+    name: payload.name,
+    room_id: payload.roomId,
+    location: payload.location,
+    description: payload.description,
+  });
   return data;
 }
 
 export async function updateCabinet(
   id: number,
-  payload: { name?: string; location?: string | null; description?: string | null }
+  payload: { name?: string; location?: string | null; description?: string | null; roomId?: number }
 ): Promise<Cabinet> {
-  const { data } = await apiClient.patch<Cabinet>(`/cabinets/${id}`, payload);
+  const { data } = await apiClient.patch<Cabinet>(`/cabinets/${id}`, {
+    name: payload.name,
+    location: payload.location,
+    description: payload.description,
+    room_id: payload.roomId,
+  });
   return data;
+}
+
+export async function deleteCabinet(id: number): Promise<void> {
+  await apiClient.delete(`/cabinets/${id}`);
 }
 
 export async function createBin(payload: {

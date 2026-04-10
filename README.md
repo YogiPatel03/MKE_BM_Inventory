@@ -36,6 +36,27 @@ npm run dev
 - **Hosting:** Render.com (backend) + Vercel (frontend)
 - **CI/CD:** GitHub Actions
 
+## Inventory Hierarchy
+
+```
+Room  →  Cabinet  →  Bin  →  Item
+                  →  Item (direct, no bin)
+```
+
+Rooms group cabinets by physical location (e.g. "Shishu Mandal", "Main Store Room").
+All existing cabinets were auto-migrated into the "Shishu Mandal" room.
+
+## Weekly Checklists
+
+Each of the four groups (Shishu Mandal, Group 1, Group 2, Group 3) gets one checklist per week, auto-generated every Monday at 06:00.
+
+- When a group member checks out an item or bin, a return task is automatically added to their group's checklist.
+- When the item or bin is returned, the task is auto-completed.
+- Coordinators and admins can add manual tasks and assign members.
+- Telegram photo proof can be requested for return tasks.
+
+Users must have their `group_name` field set (via Admin → Edit User) for auto-return tasks to appear.
+
 ## Docs
 
 | Doc | Description |
@@ -48,15 +69,16 @@ npm run dev
 | [deployment.md](docs/deployment.md) | Production deployment guide |
 | [local-dev.md](docs/local-dev.md) | Local development setup |
 | [cost-notes.md](docs/cost-notes.md) | Cost breakdown and upgrade paths |
+| [implementation-summary.md](docs/implementation-summary.md) | Recent sprint: Rooms, Checklists, mobile nav, reports |
 
 ## Roles
 
 | Role | Description |
 |---|---|
-| ADMIN | Full system access, manages users |
-| COORDINATOR | Manages inventory, processes all transactions |
+| ADMIN | Full system access, manages users and rooms |
+| COORDINATOR | Manages inventory, processes all transactions, views reports |
 | GROUP_LEAD | Processes transactions, views all history |
-| USER | Checks out and returns items |
+| USER | Checks out and returns items; submits checkout requests |
 
 ## License
 
