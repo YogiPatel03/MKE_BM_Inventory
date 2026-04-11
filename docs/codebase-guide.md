@@ -15,50 +15,62 @@ cabinet-inventory/
 │   │   ├── database.py       SQLAlchemy async engine + session factory
 │   │   ├── dependencies.py   FastAPI deps: get_db, get_current_user
 │   │   ├── models/           SQLAlchemy ORM models (one file per table)
-│   │   │   ├── cabinet.py
+│   │   │   ├── room.py           NEW — top-level physical location
+│   │   │   ├── cabinet.py        includes room_id FK
 │   │   │   ├── bin.py            includes qr_token field
 │   │   │   ├── item.py           includes is_consumable, unit_price
 │   │   │   ├── transaction.py    includes photo_request_message_id
 │   │   │   ├── transaction_photo.py
 │   │   │   ├── bin_transaction.py
+│   │   │   ├── checklist.py      NEW — Checklist, ChecklistItem, ChecklistAssignment, GroupName
 │   │   │   ├── usage_event.py    consumable usage events
 │   │   │   ├── stock_adjustment.py
 │   │   │   ├── inventory_request.py
 │   │   │   ├── purchase_record.py
 │   │   │   ├── receipt_record.py includes telegram_file_id
+│   │   │   ├── activity_log.py
 │   │   │   ├── role.py
-│   │   │   └── user.py
+│   │   │   └── user.py           includes group_name field
 │   │   ├── schemas/          Pydantic request/response schemas
+│   │   │   ├── room.py           NEW
+│   │   │   ├── cabinet.py        includes room_id, bin_count, item_count
+│   │   │   ├── checklist.py      NEW
 │   │   │   ├── item.py
 │   │   │   ├── transaction.py
 │   │   │   ├── usage_event.py
 │   │   │   ├── stock_adjustment.py
 │   │   │   ├── inventory_request.py
 │   │   │   ├── purchase.py
-│   │   │   └── report.py
+│   │   │   ├── user.py           includes group_name
+│   │   │   └── report.py         includes HeldValue* schemas
 │   │   ├── routers/          HTTP route handlers (one file per domain)
 │   │   │   ├── auth.py             /api/auth
 │   │   │   ├── users.py            /api/users
-│   │   │   ├── cabinets.py         /api/cabinets
+│   │   │   ├── rooms.py            NEW /api/rooms
+│   │   │   ├── cabinets.py         /api/cabinets (now returns bin_count, item_count)
 │   │   │   ├── bins.py             /api/bins
 │   │   │   ├── items.py            /api/items
-│   │   │   ├── transactions.py     /api/transactions
-│   │   │   ├── bin_transactions.py /api/bin-transactions
+│   │   │   ├── transactions.py     /api/transactions (hooks checklist on checkout/return)
+│   │   │   ├── bin_transactions.py /api/bin-transactions (hooks checklist on checkout/return)
+│   │   │   ├── checklists.py       NEW /api/checklists
 │   │   │   ├── usage_events.py     /api/usage-events
 │   │   │   ├── stock_adjustments.py /api/stock-adjustments
 │   │   │   ├── moves.py            /api/moves/item, /api/moves/bin
-│   │   │   ├── requests.py         /api/requests
+│   │   │   ├── requests.py         /api/requests (DMs requester on approve/deny)
 │   │   │   ├── purchases.py        /api/purchases, /api/purchases/receipts
-│   │   │   ├── reports.py          /api/reports/inventory-status, /expenses
+│   │   │   ├── reports.py          /api/reports/* (includes held-value)
 │   │   │   └── telegram_webhook.py /api/telegram
 │   │   ├── services/         Business logic (no HTTP concerns)
 │   │   │   ├── auth_service.py
+│   │   │   ├── inventory_service.py    NEW get_cabinets_with_counts() via SQL subqueries
+│   │   │   ├── checklist_service.py    NEW weekly checklist generation + return task hooks
 │   │   │   ├── transaction_service.py  checkout_item, return_item, mark_overdue
 │   │   │   ├── usage_service.py        log_usage_event
 │   │   │   ├── stock_service.py        apply_stock_adjustment
 │   │   │   ├── move_service.py         move_item, move_bin (cascades cabinet_id to items)
-│   │   │   ├── request_service.py      approve_request (creates real Transaction/BinTransaction)
+│   │   │   ├── request_service.py      approve_request, deny_request
 │   │   │   ├── purchase_service.py     log_purchase, create_receipt
+│   │   │   ├── restock_service.py      get_or_create_restock_cabinet (startup)
 │   │   │   └── telegram_service.py     all Telegram sends
 │   │   ├── core/
 │   │   │   ├── security.py       hash_password, verify_password, JWT
@@ -77,14 +89,17 @@ cabinet-inventory/
 │   │       ├── 005_bin_transactions.py
 │   │       ├── 006_inventory_requests.py
 │   │       ├── 007_purchase_receipt.py
-│   │       └── 008_receipt_telegram_file_id.py
+│   │       ├── 008_receipt_telegram_file_id.py
+│   │       ├── 009_activity_log_and_low_stock.py
+│   │       ├── 010_rooms.py          NEW — rooms table, room_id on cabinets, group_name on users
+│   │       └── 011_checklists.py     NEW — checklists, checklist_items, checklist_assignments
 │   ├── tests/
 │   │   ├── conftest.py
 │   │   ├── test_auth.py
 │   │   ├── test_inventory.py
 │   │   ├── test_permissions.py
 │   │   ├── test_transactions.py
-│   │   └── test_consumable_usage.py   consumables, bin checkout, stock adj, requests
+│   │   └── test_consumable_usage.py
 │   ├── .env.example
 │   ├── alembic.ini
 │   ├── pytest.ini
@@ -98,9 +113,12 @@ cabinet-inventory/
 │   │   ├── types/index.ts    All TypeScript interfaces
 │   │   ├── api/
 │   │   │   ├── client.ts         Axios instance, auth interceptor, camelCase converter
-│   │   │   ├── auth.ts
-│   │   │   ├── cabinets.ts
-│   │   │   ├── items.ts          createItem accepts isConsumable, unitPrice
+│   │   │   ├── auth.ts           includes createUser/updateUser with groupName
+│   │   │   ├── rooms.ts          NEW listRooms, getRoom, createRoom, updateRoom, deleteRoom
+│   │   │   ├── cabinets.ts       listCabinets(roomId?), createCabinet requires roomId
+│   │   │   ├── checklists.ts     NEW listChecklists, getChecklist, item/assignment CRUD, backfill
+│   │   │   ├── users.ts          NEW listUsers, getUser (extracted from AdminPage)
+│   │   │   ├── items.ts
 │   │   │   ├── transactions.ts
 │   │   │   ├── binTransactions.ts
 │   │   │   ├── usageEvents.ts
@@ -108,34 +126,39 @@ cabinet-inventory/
 │   │   │   ├── moves.ts
 │   │   │   ├── requests.ts
 │   │   │   ├── purchases.ts
-│   │   │   └── reports.ts        getInventoryStatus, getExpenseReport(start, end, itemId?)
+│   │   │   └── reports.ts        getInventoryStatus, getExpenseReport, getHeldValueReport
 │   │   ├── store/
 │   │   │   └── auth.ts
 │   │   ├── pages/
 │   │   │   ├── LoginPage.tsx
 │   │   │   ├── DashboardPage.tsx
-│   │   │   ├── InventoryListPage.tsx  search, cabinet/bin filter, location column
-│   │   │   ├── CabinetDetailPage.tsx  BinSection with checkout/return, QR button
-│   │   │   ├── ItemDetailPage.tsx     consumable UI, move, stock adjust, usage history
+│   │   │   ├── RoomsPage.tsx         NEW — room list with admin CRUD
+│   │   │   ├── RoomDetailPage.tsx    NEW — cabinets within a room; cabinet edit/move
+│   │   │   ├── InventoryPage.tsx     redirects to /rooms
+│   │   │   ├── InventoryListPage.tsx search, cabinet/bin filter, location column
+│   │   │   ├── CabinetDetailPage.tsx bins + items; request button for non-privileged users
+│   │   │   ├── ItemDetailPage.tsx    consumable UI, move, stock adjust, usage history, request button
+│   │   │   ├── ChecklistPage.tsx     NEW — weekly checklists per group with backfill sync
 │   │   │   ├── TransactionsPage.tsx
-│   │   │   ├── ReportsPage.tsx        period picker, item filter, purchases/usage tabs
-│   │   │   ├── QRScanPage.tsx         role-aware: coordinator gets checkout/return, user gets request form
-│   │   │   ├── AdminPage.tsx
-│   │   │   └── SettingsPage.tsx       Telegram linking, mobile logout
+│   │   │   ├── ReportsPage.tsx       4 tabs: Inventory Status, Purchases, Usage, Held Value
+│   │   │   ├── RequestsPage.tsx
+│   │   │   ├── QRScanPage.tsx        role-aware: coordinator gets checkout/return, user gets request
+│   │   │   ├── AdminPage.tsx         user table includes Group column
+│   │   │   └── SettingsPage.tsx      Telegram linking, mobile logout
 │   │   └── components/
 │   │       ├── layout/
-│   │       │   ├── AppShell.tsx
-│   │       │   ├── Sidebar.tsx
-│   │       │   └── MobileNav.tsx
+│   │       │   ├── AppShell.tsx      min-h-0 on main (mobile scroll fix)
+│   │       │   ├── Sidebar.tsx       includes Rooms, Checklist; Reports for coordinators+
+│   │       │   └── MobileNav.tsx     4 primary tabs + More slide-up drawer
 │   │       ├── modals/
-│   │       │   ├── CabinetModal.tsx
+│   │       │   ├── CabinetModal.tsx  create + edit mode; room selector (enables cabinet moves)
 │   │       │   ├── BinModal.tsx
-│   │       │   ├── BinQRModal.tsx      QR display, PNG/SVG download, print
-│   │       │   ├── ItemModal.tsx       includes is_consumable, unit_price fields
-│   │       │   ├── UserModal.tsx
-│   │       │   ├── MarkAsUsedModal.tsx consumable usage form
-│   │       │   ├── StockAdjustModal.tsx manual stock adjustment
-│   │       │   └── MoveModal.tsx       move item or bin to different cabinet/bin
+│   │       │   ├── BinQRModal.tsx    QR display, PNG/SVG download, print
+│   │       │   ├── ItemModal.tsx     includes is_consumable, unit_price fields
+│   │       │   ├── UserModal.tsx     includes group selector dropdown
+│   │       │   ├── MarkAsUsedModal.tsx
+│   │       │   ├── StockAdjustModal.tsx
+│   │       │   └── MoveModal.tsx
 │   │       └── transactions/
 │   │           ├── CheckoutModal.tsx
 │   │           ├── ReturnModal.tsx
@@ -144,6 +167,16 @@ cabinet-inventory/
 │   └── package.json
 │
 ├── docs/
+│   ├── architecture.md
+│   ├── codebase-guide.md         (this file)
+│   ├── domain-model.md           includes Room, Checklist, User.group_name
+│   ├── implementation-summary.md full change log for the rooms/checklists sprint
+│   ├── roles-permissions.md
+│   ├── telegram-bot.md
+│   ├── photo-proof-flow.md
+│   ├── deployment.md
+│   ├── local-dev.md
+│   └── cost-notes.md
 └── .github/workflows/
 ```
 
@@ -154,8 +187,11 @@ cabinet-inventory/
 ### Entry point: `app/main.py`
 
 Creates the FastAPI app, registers all routers under `/api`, sets up CORS, and manages startup/shutdown via the `lifespan` context manager. On startup it:
-- Starts APScheduler to run `mark_overdue_transactions()` hourly
-- Registers the Telegram webhook with Telegram's API (production only)
+- Starts APScheduler with two jobs:
+  - Hourly: `mark_overdue_transactions()`
+  - Monday 06:00: `get_or_create_weekly_checklists()` — pre-generates all 4 group checklists for the week
+- Registers the Telegram webhook (production only)
+- Calls `get_or_create_restock_cabinet()` to ensure the restock sentinel cabinet exists
 
 ### Config: `app/config.py`
 
@@ -175,28 +211,41 @@ Two FastAPI dependencies used across all routers:
 
 One file per database table. SQLAlchemy 2.0 `Mapped`/`mapped_column` style.
 
+**Inventory hierarchy:** `Room → Cabinet → Bin → Item`
+
 `Item.quantity_available` is a **denormalized cache**. It is updated atomically (with `SELECT FOR UPDATE`) during checkout, return, usage events, and stock adjustments. Never update it directly.
+
+`User.group_name` determines which group's weekly checklist gets auto-return tasks when that user checks out items or bins. Valid values are defined in `GroupName.ALL`: `SHISHU_MANDAL`, `GROUP_1`, `GROUP_2`, `GROUP_3`.
 
 ### Schemas (`app/schemas/`)
 
 Pydantic models for request bodies (`*Create`, `*Update`) and response shapes (`*Out`). The API returns snake_case. The frontend axios client converts to camelCase automatically.
 
+`CabinetOut` includes computed `bin_count` and `item_count` fields — these are injected by `get_cabinets_with_counts()`, not stored in the DB.
+
 ### Routers (`app/routers/`)
 
 Thin HTTP handlers per domain. Routers call services; they don't contain complex business logic or raw SQL (except simple list queries).
+
+**Checklist hooks** are wired into `transactions.py` and `bin_transactions.py`:
+- After checkout → `add_return_task_for_transaction()` or `add_return_task_for_bin_transaction()`
+- After return → `auto_complete_return_task_for_transaction()` or `auto_complete_return_task_for_bin()`
 
 ### Services (`app/services/`)
 
 | File | Purpose |
 |---|---|
 | `auth_service.py` | `authenticate_user()` |
+| `inventory_service.py` | `get_cabinets_with_counts()` — uses SQL subqueries to return bin/item counts per cabinet without N+1 queries |
+| `checklist_service.py` | `get_or_create_weekly_checklists()`, `get_current_checklist_for_group()`, `add_return_task_for_transaction()`, `add_return_task_for_bin_transaction()`, `auto_complete_return_task_for_transaction()`, `auto_complete_return_task_for_bin()`, `complete_checklist_item()` |
 | `transaction_service.py` | `checkout_item()`, `return_item()`, `cancel_transaction()`, `mark_overdue_transactions()` — raises `TransactionConflictError` for consumables or bin items |
 | `usage_service.py` | `log_usage_event()` — raises `TransactionConflictError` (409) for non-consumables |
 | `stock_service.py` | `apply_stock_adjustment()` — raises `TransactionConflictError` (409) for invalid deltas |
 | `move_service.py` | `move_item()`, `move_bin()` — bin move cascades `cabinet_id` to all items in the bin |
 | `request_service.py` | `approve_request()` — creates real `Transaction`/`BinTransaction`, sets status to FULFILLED; `deny_request()` |
 | `purchase_service.py` | `log_purchase()`, `create_receipt()` |
-| `telegram_service.py` | `notify_checkout()`, `notify_return_and_request_photo()`, `notify_overdue()`, `notify_purchase_and_request_receipt()` (sends group + DM), `notify_new_request()`, `notify_account_linked()` |
+| `restock_service.py` | `get_or_create_restock_cabinet()` — ensures sentinel cabinet exists on startup |
+| `telegram_service.py` | `notify_checkout()`, `notify_return_and_request_photo()`, `notify_overdue()`, `notify_purchase_and_request_receipt()`, `notify_new_request()`, `notify_request_approved()`, `notify_request_denied()`, `notify_checklist_return_proof()`, `notify_account_linked()` |
 
 `transaction_service` is the most critical file. All quantity mutations use row-level locking (`SELECT FOR UPDATE`).
 
@@ -226,6 +275,9 @@ Run with `alembic upgrade head`. Migrations in sequence:
 - `006` — inventory requests
 - `007` — purchase records and receipt records
 - `008` — `telegram_file_id` on receipt records
+- `009` — activity log and low-stock tracking
+- `010` — `rooms` table; `room_id` (NOT NULL) on cabinets; all existing cabinets migrated to "Shishu Mandal"; `group_name` on users
+- `011` — `checklists`, `checklist_items`, `checklist_assignments` tables
 
 ### Tests (`tests/`)
 
@@ -253,6 +305,23 @@ TanStack Query wraps every API call. After mutations, the relevant query keys ar
 
 `src/App.tsx` defines the route tree. All authenticated routes are wrapped in `RequireAuth`. The `AppShell` layout wraps all inner routes.
 
+Key routes:
+| Path | Page |
+|---|---|
+| `/dashboard` | DashboardPage |
+| `/rooms` | RoomsPage |
+| `/rooms/:id` | RoomDetailPage |
+| `/inventory/cabinets/:id` | CabinetDetailPage |
+| `/inventory/items/:id` | ItemDetailPage |
+| `/checklist` | ChecklistPage |
+| `/transactions` | TransactionsPage |
+| `/requests` | RequestsPage |
+| `/reports` | ReportsPage |
+| `/admin` | AdminPage |
+| `/qr/:token` | QRScanPage |
+
+`/inventory` redirects to `/rooms`.
+
 ### CSS conventions
 
 `src/index.css` defines reusable component classes:
@@ -267,7 +336,7 @@ TanStack Query wraps every API call. After mutations, the relevant query keys ar
 
 ### TypeScript types
 
-All shared types live in `src/types/index.ts` in camelCase. If the backend adds a new field, add it here too.
+All shared types live in `src/types/index.ts` in camelCase. If the backend adds a new field, add it here too. Key additions: `Room`, `GroupName`, `GROUP_DISPLAY`, `GROUP_NAMES`, `Checklist`, `ChecklistItem`, `ChecklistAssignment`, `ChecklistSummary`, `HeldValueReport`.
 
 ---
 
@@ -293,3 +362,9 @@ Simplifies backend storage (no S3/Cloudinary, no file size limits, no CDN). Tele
 
 **Why SQLite for tests?**
 Speed. In-memory SQLite means no Docker dependency in CI, each test starts with a clean schema in milliseconds. Tradeoff: SQLite dialect differences (no `FOR UPDATE`, no timezone-aware datetimes).
+
+**Why are checklist return tasks created at checkout time, not on a schedule?**
+The checkout event has all the context needed (borrower, item, group). A scheduled job would need to diff active transactions against existing tasks — more complex with the same result. The `POST /checklists/backfill-active-transactions` endpoint exists for one-off recovery if tasks were missed (e.g. user had no group set at checkout time).
+
+**Why does held inventory value use `quantity_total` instead of `quantity_available`?**
+Checked-out items still belong to the organisation. Using `quantity_total` ensures the reported asset value doesn't fluctuate with checkouts. Items with `unit_price = NULL` contribute $0.
