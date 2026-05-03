@@ -10,16 +10,16 @@ from app.schemas.user import UserOut
 class CheckoutRequest(BaseModel):
     item_id: int
     user_id: int
-    quantity: int = 1
+    quantity: float = 1.0
     due_at: Optional[datetime] = None
     notes: Optional[str] = None
 
     @field_validator("quantity")
     @classmethod
-    def qty_positive(cls, v: int) -> int:
-        if v < 1:
-            raise ValueError("quantity must be at least 1")
-        return v
+    def qty_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("quantity must be greater than 0")
+        return round(v, 2)
 
 
 class ReturnRequest(BaseModel):
@@ -33,7 +33,7 @@ class TransactionOut(BaseModel):
     item_id: int
     user_id: int
     processed_by_user_id: Optional[int]
-    quantity: int
+    quantity: float
     status: str
     checked_out_at: datetime
     due_at: Optional[datetime]

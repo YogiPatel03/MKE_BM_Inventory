@@ -29,6 +29,12 @@ class GroupName:
     }
 
 
+class SubchecklistType:
+    PRE_SABHA = "PRE_SABHA"
+    POST_SABHA = "POST_SABHA"
+    CUSTOM = "CUSTOM"
+
+
 class Checklist(Base):
     """
     Weekly checklist for one group (one per group per week).
@@ -51,14 +57,54 @@ class Checklist(Base):
 
     items: Mapped[List["ChecklistItem"]] = relationship(
         "ChecklistItem", back_populates="checklist", cascade="all, delete-orphan",
-        order_by="ChecklistItem.item_order"
+        order_by="ChecklistItem.item_order",
+        foreign_keys="ChecklistItem.checklist_id",
     )
     assignments: Mapped[List["ChecklistAssignment"]] = relationship(
         "ChecklistAssignment", back_populates="checklist", cascade="all, delete-orphan"
     )
+    subchecklists: Mapped[List["Subchecklist"]] = relationship(
+        "Subchecklist", back_populates="checklist", cascade="all, delete-orphan",
+        order_by="Subchecklist.section_order"
+    )
 
     def __repr__(self) -> str:
         return f"<Checklist {self.group_name} week={self.week_start}>"
+
+
+class Subchecklist(Base):
+    """
+    A section within a weekly checklist (e.g., Pre Sabha, Post Sabha, or custom).
+    Two mandatory subchecklists are always present: PRE_SABHA and POST_SABHA.
+    """
+
+    __tablename__ = "subchecklists"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    checklist_id: Mapped[int] = mapped_column(ForeignKey("checklists.id"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    section_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=SubchecklistType.CUSTOM
+    )  # PRE_SABHA | POST_SABHA | CUSTOM
+    is_mandatory: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    section_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    checklist: Mapped["Checklist"] = relationship("Checklist", back_populates="subchecklists")
+    items: Mapped[List["ChecklistItem"]] = relationship(
+        "ChecklistItem", back_populates="subchecklist",
+        order_by="ChecklistItem.item_order",
+        foreign_keys="ChecklistItem.subchecklist_id",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Subchecklist {self.id} '{self.title}' type={self.section_type}>"
 
 
 class ChecklistItem(Base):
@@ -68,9 +114,15 @@ class ChecklistItem(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     checklist_id: Mapped[int] = mapped_column(ForeignKey("checklists.id"), nullable=False, index=True)
+    subchecklist_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("subchecklists.id"), nullable=True, index=True
+    )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     item_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Per-task assignee. NULL means "Everyone" — one completion counts for all.
+    assignee_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     # Auto-generated return tasks
     is_auto_generated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -97,8 +149,14 @@ class ChecklistItem(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    checklist: Mapped["Checklist"] = relationship("Checklist", back_populates="items")
+    checklist: Mapped["Checklist"] = relationship(
+        "Checklist", back_populates="items", foreign_keys=[checklist_id]
+    )
+    subchecklist: Mapped[Optional["Subchecklist"]] = relationship(
+        "Subchecklist", back_populates="items", foreign_keys=[subchecklist_id]
+    )
     completed_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[completed_by_user_id])
+    assignee: Mapped[Optional["User"]] = relationship("User", foreign_keys=[assignee_id])
 
     def __repr__(self) -> str:
         return f"<ChecklistItem {self.id} '{self.title[:30]}'>"

@@ -10,6 +10,7 @@ from app.core.security import hash_password
 from app.models.cabinet import Cabinet
 from app.models.item import Item
 from app.models.role import Role
+from app.models.room import Room
 from app.models.user import User
 
 
@@ -44,7 +45,10 @@ async def _seed(db: AsyncSession):
     bob = User(full_name="Bob", username="bob", password_hash=hash_password("bobpass1"), role_id=user_role.id)
     db.add_all([admin, alice, bob])
 
-    cabinet = Cabinet(name="Main Cabinet")
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cabinet = Cabinet(name="Main Cabinet", room_id=room.id)
     db.add(cabinet)
     await db.flush()
 
@@ -103,7 +107,7 @@ async def test_user_cannot_create_cabinet(client: AsyncClient, db: AsyncSession)
     token = await _login(client, "alice", "alicepass")
     r = await client.post(
         "/api/cabinets",
-        json={"name": "Sneaky Cabinet"},
+        json={"name": "Sneaky Cabinet", "room_id": 1},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 403

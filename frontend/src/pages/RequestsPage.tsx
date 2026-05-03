@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X, Clock } from "lucide-react";
 import { listRequests, approveRequest, denyRequest, cancelRequest } from "@/api/requests";
 import { useAuthStore } from "@/store/auth";
+import { PromptModal } from "@/components/modals/PromptModal";
 import type { InventoryRequest } from "@/types";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -18,6 +19,7 @@ export function RequestsPage() {
   const qc = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const canApprove = user?.role.canApproveRequests || user?.role.canManageUsers;
+  const [denyingRequest, setDenyingRequest] = useState<InventoryRequest | null>(null);
 
   const { data: requests = [], isLoading } = useQuery({
     queryKey: ["requests", statusFilter],
@@ -39,11 +41,7 @@ export function RequestsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["requests"] }),
   });
 
-  const handleDeny = (req: InventoryRequest) => {
-    const reason = window.prompt("Reason for denial (optional):");
-    if (reason === null) return; // cancelled
-    denyMut.mutate({ id: req.id, reason: reason || undefined });
-  };
+  const handleDeny = (req: InventoryRequest) => setDenyingRequest(req);
 
   return (
     <div className="space-y-4">
@@ -95,7 +93,7 @@ export function RequestsPage() {
                   </div>
                   <div className="text-sm text-slate-600 mt-1">
                     {req.itemId ? `Item #${req.itemId}` : `Bin #${req.binId}`}
-                    {req.quantityRequested > 1 && ` × ${req.quantityRequested}`}
+                    {req.quantityRequested !== 1 && ` × ${Number.isInteger(req.quantityRequested) ? req.quantityRequested : req.quantityRequested.toFixed(2)}`}
                   </div>
                   {req.reason && (
                     <p className="text-sm text-slate-500 mt-1">"{req.reason}"</p>
@@ -146,6 +144,20 @@ export function RequestsPage() {
             </div>
           ))}
         </div>
+      )}
+
+      {denyingRequest && (
+        <PromptModal
+          title="Deny Request"
+          label="Reason for denial"
+          placeholder="Enter denial reason..."
+          confirmLabel="Deny"
+          onConfirm={(reason) => {
+            denyMut.mutate({ id: denyingRequest.id, reason: reason || undefined });
+            setDenyingRequest(null);
+          }}
+          onCancel={() => setDenyingRequest(null)}
+        />
       )}
     </div>
   );

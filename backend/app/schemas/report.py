@@ -9,7 +9,7 @@ class ItemPurchaseSummary(BaseModel):
     item_id: int
     item_name: str
     cabinet_id: int
-    total_purchased: int
+    total_purchased: float
     total_purchase_cost: Optional[float] = None
 
 
@@ -18,7 +18,7 @@ class ItemUsageSummary(BaseModel):
     item_id: int
     item_name: str
     cabinet_id: int
-    total_used: int
+    total_used: float
     total_cost: Optional[float] = None
     unit: Optional[str] = None  # e.g. "ft", "sheet" — reserved for future
 
@@ -37,9 +37,9 @@ class LowStockItem(BaseModel):
     item_name: str
     cabinet_id: int
     bin_id: Optional[int] = None
-    quantity_available: int
-    quantity_total: int
-    low_stock_threshold: Optional[int] = None
+    quantity_available: float
+    quantity_total: float
+    low_stock_threshold: Optional[float] = None
 
 
 class OutOfStockItem(BaseModel):
@@ -67,8 +67,8 @@ class HeldValueItem(BaseModel):
     room_id: int
     room_name: str
     bin_id: Optional[int] = None
-    quantity_total: int
-    quantity_available: int
+    quantity_total: float
+    quantity_available: float
     unit_price: Optional[float] = None
     held_value: float  # unit_price * quantity_total
 

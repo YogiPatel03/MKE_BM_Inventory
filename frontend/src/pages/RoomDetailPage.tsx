@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Box, ChevronRight, MapPin, Pencil, Plus, Search } from "lucide-react";
+import { ArrowLeft, Box, MapPin, Pencil, Plus, Search } from "lucide-react";
 import { getRoom } from "@/api/rooms";
 import { listCabinets } from "@/api/cabinets";
 import { useAuthStore } from "@/store/auth";

@@ -63,7 +63,7 @@ async def log_purchase(
     await db.flush()
     await db.refresh(purchase)
 
-    cost_impact = total_price or (unit_price * quantity_purchased if unit_price else None)
+    cost_impact = total_price or (unit_price * float(quantity_purchased) if unit_price else None)
     await log_activity(
         db,
         activity_type=ActivityType.PURCHASE_LOGGED,
@@ -81,7 +81,7 @@ async def log_purchase(
     # Restore from Restock Me if restocking brought stock > 0
     await restore_from_restock_if_nonzero(db, item, actor_id=purchased_by_user_id)
 
-    log.info("Purchase: purchase=%d item=%d qty=%d", purchase.id, item_id, quantity_purchased)
+    log.info("Purchase: purchase=%d item=%d qty=%s", purchase.id, item_id, quantity_purchased)
     return purchase
 
 

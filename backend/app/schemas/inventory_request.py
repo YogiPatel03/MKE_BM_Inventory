@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -7,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class InventoryRequestCreate(BaseModel):
     item_id: Optional[int] = None
     bin_id: Optional[int] = None
-    quantity_requested: int = Field(default=1, ge=1)
+    quantity_requested: Decimal = Field(default=Decimal("1"), gt=Decimal("0"), decimal_places=2)
     reason: Optional[str] = None
     due_at: Optional[datetime] = None
 
@@ -36,7 +37,7 @@ class InventoryRequestOut(BaseModel):
     approver_id: Optional[int] = None
     item_id: Optional[int] = None
     bin_id: Optional[int] = None
-    quantity_requested: int
+    quantity_requested: Decimal
     status: str
     reason: Optional[str] = None
     denial_reason: Optional[str] = None

@@ -1,7 +1,11 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Edit2, Flame, Inbox, MapPin, RotateCcw, Scale } from "lucide-react";
+import { toast } from "@/store/toast";
+import { ConfirmModal } from "@/components/modals/ConfirmModal";
+import { PromptModal } from "@/components/modals/PromptModal";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 import { getItem, updateItem } from "@/api/items";
 import { listTransactions } from "@/api/transactions";
 import { submitRequest } from "@/api/requests";
@@ -48,6 +52,7 @@ function InlineEditModal({
   const [threshold, setThreshold] = useState(item.lowStockThreshold?.toString() ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  useEscapeKey(onClose);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,7 +63,7 @@ function InlineEditModal({
         name: name.trim(),
         description: description.trim() || null,
         unitPrice: unitPrice ? parseFloat(unitPrice) : undefined,
-        lowStockThreshold: threshold ? parseInt(threshold, 10) : undefined,
+        lowStockThreshold: threshold ? parseFloat(threshold) : undefined,
       });
       qc.invalidateQueries({ queryKey: ["item", item.id] });
       qc.invalidateQueries({ queryKey: ["activity"] });
@@ -71,21 +76,30 @@ function InlineEditModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-      <div className="card w-full max-w-md p-6 relative">
-        <h2 className="text-lg font-semibold text-slate-900 mb-4">Edit Item</h2>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-item-title"
+        className="card w-full max-w-md p-6 relative"
+      >
+        <h2 id="edit-item-title" className="text-lg font-semibold text-slate-900 mb-4">Edit Item</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="label">Name *</label>
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
+            <label htmlFor="edit-item-name" className="label">Name *</label>
+            <input id="edit-item-name" className="input" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
           </div>
           <div>
-            <label className="label">Description</label>
-            <textarea className="input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+            <label htmlFor="edit-item-desc" className="label">Description</label>
+            <textarea id="edit-item-desc" className="input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           <div>
-            <label className="label">Unit price ($)</label>
+            <label htmlFor="edit-item-price" className="label">Unit price ($)</label>
             <input
+              id="edit-item-price"
               type="number"
               step="0.01"
               min="0"
@@ -96,10 +110,12 @@ function InlineEditModal({
             />
           </div>
           <div>
-            <label className="label">Low stock threshold</label>
+            <label htmlFor="edit-item-threshold" className="label">Low stock threshold</label>
             <input
+              id="edit-item-threshold"
               type="number"
               min="0"
+              step="0.01"
               className="input"
               value={threshold}
               onChange={(e) => setThreshold(e.target.value)}
@@ -135,6 +151,8 @@ export function ItemDetailPage() {
   const [moveOpen, setMoveOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [reversingId, setReversingId] = useState<number | null>(null);
+  const [reverseConfirmId, setReverseConfirmId] = useState<number | null>(null);
+  const [requestPromptOpen, setRequestPromptOpen] = useState(false);
   const [requestLoading, setRequestLoading] = useState(false);
 
   const { data: item, isLoading } = useQuery({
@@ -165,10 +183,11 @@ export function ItemDetailPage() {
     enabled: !!item,
   });
 
-  const handleRequest = async () => {
+  const handleRequest = () => setRequestPromptOpen(true);
+
+  const doRequest = async (reason: string) => {
     if (!item) return;
-    const reason = window.prompt("Reason for request (optional):");
-    if (reason === null) return; // user cancelled
+    setRequestPromptOpen(false);
     setRequestLoading(true);
     try {
       await submitRequest({
@@ -178,14 +197,16 @@ export function ItemDetailPage() {
       });
       navigate("/requests");
     } catch (e: any) {
-      alert(e?.response?.data?.detail ?? "Failed to submit request");
+      toast.error(e?.response?.data?.detail ?? "Failed to submit request");
     } finally {
       setRequestLoading(false);
     }
   };
 
-  const handleReverse = async (eventId: number) => {
-    if (!confirm("Reverse this usage event? This will restore the consumed stock.")) return;
+  const handleReverse = (eventId: number) => setReverseConfirmId(eventId);
+
+  const doReverse = async (eventId: number) => {
+    setReverseConfirmId(null);
     setReversingId(eventId);
     try {
       await reverseUsageEvent(eventId, "Reversed from UI");
@@ -193,7 +214,7 @@ export function ItemDetailPage() {
       qc.invalidateQueries({ queryKey: ["item", itemId] });
       qc.invalidateQueries({ queryKey: ["activity"] });
     } catch (e: any) {
-      alert(e?.response?.data?.detail ?? "Failed to reverse usage event");
+      toast.error(e?.response?.data?.detail ?? "Failed to reverse usage event");
     } finally {
       setReversingId(null);
     }
@@ -438,6 +459,25 @@ export function ItemDetailPage() {
       )}
       {editOpen && item && (
         <InlineEditModal item={item} onClose={() => setEditOpen(false)} />
+      )}
+      {requestPromptOpen && item && (
+        <PromptModal
+          title="Request Checkout"
+          label="Reason for request"
+          placeholder="e.g. needed for event setup"
+          confirmLabel="Submit request"
+          onConfirm={doRequest}
+          onCancel={() => setRequestPromptOpen(false)}
+        />
+      )}
+      {reverseConfirmId !== null && (
+        <ConfirmModal
+          title="Reverse Usage Event"
+          message="This will restore the consumed stock. Continue?"
+          confirmLabel="Reverse"
+          onConfirm={() => doReverse(reverseConfirmId)}
+          onCancel={() => setReverseConfirmId(null)}
+        />
       )}
     </div>
   );

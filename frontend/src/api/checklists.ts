@@ -1,11 +1,16 @@
 import { apiClient } from "./client";
-import type { Checklist, ChecklistItem, ChecklistSummary, ChecklistAssignment } from "@/types";
+import type { Checklist, ChecklistItem, ChecklistSummary, ChecklistAssignment, Subchecklist } from "@/types";
 
 export async function listChecklists(params?: {
   groupName?: string;
   weekStart?: string;
 }): Promise<ChecklistSummary[]> {
-  const { data } = await apiClient.get<ChecklistSummary[]>("/checklists", { params });
+  const { data } = await apiClient.get<ChecklistSummary[]>("/checklists", {
+    params: {
+      ...(params?.groupName && { group_name: params.groupName }),
+      ...(params?.weekStart && { week_start: params.weekStart }),
+    },
+  });
   return data;
 }
 
@@ -16,11 +21,50 @@ export async function getChecklist(id: number): Promise<Checklist> {
 
 export async function addChecklistItem(
   checklistId: number,
-  payload: { title: string; description?: string; itemOrder?: number }
+  payload: {
+    title: string;
+    description?: string;
+    itemOrder?: number;
+    assigneeId?: number;
+    subchecklistId?: number;
+  }
 ): Promise<ChecklistItem> {
   const { data } = await apiClient.post<ChecklistItem>(
     `/checklists/${checklistId}/items`,
-    payload
+    {
+      title: payload.title,
+      description: payload.description,
+      item_order: payload.itemOrder,
+      assignee_id: payload.assigneeId,
+      subchecklist_id: payload.subchecklistId,
+    }
+  );
+  return data;
+}
+
+export async function updateChecklistItem(
+  checklistId: number,
+  itemId: number,
+  payload: { title?: string; description?: string; assigneeId?: number | null }
+): Promise<ChecklistItem> {
+  const { data } = await apiClient.patch<ChecklistItem>(
+    `/checklists/${checklistId}/items/${itemId}`,
+    {
+      title: payload.title,
+      description: payload.description,
+      assignee_id: payload.assigneeId,
+    }
+  );
+  return data;
+}
+
+export async function createSubchecklist(
+  checklistId: number,
+  payload: { title: string; sectionOrder?: number }
+): Promise<Subchecklist> {
+  const { data } = await apiClient.post<Subchecklist>(
+    `/checklists/${checklistId}/subchecklists`,
+    { title: payload.title, section_order: payload.sectionOrder }
   );
   return data;
 }

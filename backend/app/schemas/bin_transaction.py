@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -26,5 +26,11 @@ class BinTransactionOut(BaseModel):
     due_at: Optional[datetime] = None
     returned_at: Optional[datetime] = None
     notes: Optional[str] = None
+    included_item_ids: Optional[List[int]] = None
     created_at: datetime
     updated_at: datetime
+
+
+class BinCheckoutOut(BinTransactionOut):
+    """Checkout response that includes excluded items (already individually checked out)."""
+    excluded_item_ids: List[int] = []

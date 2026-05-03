@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { checkout } from "@/api/transactions";
 import { useAuthStore } from "@/store/auth";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 import type { Item } from "@/types";
 
 interface Props {
@@ -14,11 +15,12 @@ export function CheckoutModal({ item, onClose }: Props) {
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
 
-  const [quantity, setQuantity] = useState(1);
+  const [quantity, setQuantity] = useState(1.0);
   const [dueAt, setDueAt] = useState("");
   const [notes, setNotes] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  useEscapeKey(onClose);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,37 +46,50 @@ export function CheckoutModal({ item, onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-      <div className="card w-full max-w-md p-6 relative">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="checkout-modal-title"
+        className="card w-full max-w-md p-6 relative"
+      >
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 text-slate-400 hover:text-slate-700"
+          aria-label="Close"
+          className="absolute top-4 right-4 p-1.5 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
         >
-          <X className="h-5 w-5" />
+          <X className="h-4 w-4" />
         </button>
 
-        <h2 className="text-lg font-semibold text-slate-900 mb-1">Check Out Item</h2>
+        <h2 id="checkout-modal-title" className="text-lg font-semibold text-slate-900 mb-1">Check Out Item</h2>
         <p className="text-sm text-slate-500 mb-5">
-          {item.name} — {item.quantityAvailable} available
+          {item.name} — {Number.isInteger(item.quantityAvailable) ? item.quantityAvailable : item.quantityAvailable.toFixed(2)} available
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="label">Quantity</label>
+            <label htmlFor="checkout-qty" className="label">Quantity</label>
             <input
+              id="checkout-qty"
               type="number"
-              min={1}
+              min={0.01}
               max={item.quantityAvailable}
+              step={0.01}
               value={quantity}
-              onChange={(e) => setQuantity(Number(e.target.value))}
+              onChange={(e) => setQuantity(parseFloat(e.target.value) || 0)}
               className="input"
               required
+              autoFocus
             />
           </div>
 
           <div>
-            <label className="label">Due Date (optional)</label>
+            <label htmlFor="checkout-due" className="label">Due Date (optional)</label>
             <input
+              id="checkout-due"
               type="date"
               value={dueAt}
               onChange={(e) => setDueAt(e.target.value)}
@@ -84,8 +99,9 @@ export function CheckoutModal({ item, onClose }: Props) {
           </div>
 
           <div>
-            <label className="label">Notes (optional)</label>
+            <label htmlFor="checkout-notes" className="label">Notes (optional)</label>
             <textarea
+              id="checkout-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}

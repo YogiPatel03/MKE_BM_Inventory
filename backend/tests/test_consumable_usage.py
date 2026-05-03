@@ -8,9 +8,10 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
-from app.models.cabinet import Cabinet
 from app.models.bin import Bin
+from app.models.cabinet import Cabinet
 from app.models.role import Role
+from app.models.room import Room
 from app.models.user import User
 
 
@@ -66,7 +67,10 @@ async def _login(client: AsyncClient, username: str, password: str) -> str:
 
 async def _setup(client: AsyncClient, db: AsyncSession, headers: dict):
     """Create cabinet, bin, consumable item, non-consumable item. Returns ids."""
-    cab = (await client.post("/api/cabinets", json={"name": "Cabinet A"}, headers=headers)).json()
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Cabinet A", "room_id": room.id}, headers=headers)).json()
     bin_ = (await client.post("/api/bins", json={"label": "B1", "cabinet_id": cab["id"]}, headers=headers)).json()
     consumable = (await client.post(
         "/api/items",
@@ -134,7 +138,7 @@ async def test_usage_history_endpoint(client: AsyncClient, db: AsyncSession):
     assert r.status_code == 200
     events = r.json()
     assert len(events) == 1
-    assert events[0]["quantity_used"] == 5
+    assert float(events[0]["quantity_used"]) == 5
 
 
 # ─── Checkout restricted for consumables ─────────────────────────────────────
@@ -161,8 +165,11 @@ async def test_cannot_individually_checkout_bin_item(client: AsyncClient, db: As
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
 
-    cab = (await client.post("/api/cabinets", json={"name": "C"}, headers=headers)).json()
+    cab = (await client.post("/api/cabinets", json={"name": "C", "room_id": room.id}, headers=headers)).json()
     bin_ = (await client.post("/api/bins", json={"label": "B1", "cabinet_id": cab["id"]}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
@@ -170,12 +177,20 @@ async def test_cannot_individually_checkout_bin_item(client: AsyncClient, db: As
         headers=headers,
     )).json()
 
+    # First checkout the bin as a whole
+    await client.post(
+        "/api/bin-transactions",
+        json={"bin_id": bin_["id"], "user_id": 1},
+        headers=headers,
+    )
+
+    # Now individual checkout of an item inside the checked-out bin must be rejected
     r = await client.post(
         "/api/transactions/checkout",
         json={"item_id": item["id"], "user_id": 1, "quantity": 1},
         headers=headers,
     )
-    assert r.status_code == 409  # must reject individual checkout of bin item
+    assert r.status_code == 409  # bin is checked out — individual checkout blocked
 
 
 # ─── Stock adjustment ─────────────────────────────────────────────────────────
@@ -221,9 +236,12 @@ async def test_move_bin_cascades_to_items(client: AsyncClient, db: AsyncSession)
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
 
-    cab_a = (await client.post("/api/cabinets", json={"name": "A"}, headers=headers)).json()
-    cab_b = (await client.post("/api/cabinets", json={"name": "B"}, headers=headers)).json()
+    cab_a = (await client.post("/api/cabinets", json={"name": "A", "room_id": room.id}, headers=headers)).json()
+    cab_b = (await client.post("/api/cabinets", json={"name": "B", "room_id": room.id}, headers=headers)).json()
     bin_ = (await client.post("/api/bins", json={"label": "B1", "cabinet_id": cab_a["id"]}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
@@ -252,8 +270,11 @@ async def test_approve_request_creates_transaction(client: AsyncClient, db: Asyn
     _, admin_role = await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
 
-    cab = (await client.post("/api/cabinets", json={"name": "C"}, headers=headers)).json()
+    cab = (await client.post("/api/cabinets", json={"name": "C", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
         json={"name": "Tape", "quantity_total": 10, "cabinet_id": cab["id"]},
@@ -283,8 +304,11 @@ async def test_approve_request_insufficient_stock(client: AsyncClient, db: Async
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
 
-    cab = (await client.post("/api/cabinets", json={"name": "C"}, headers=headers)).json()
+    cab = (await client.post("/api/cabinets", json={"name": "C", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
         json={"name": "Tape", "quantity_total": 2, "cabinet_id": cab["id"]},

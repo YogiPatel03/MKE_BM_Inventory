@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { MapPin, X } from "lucide-react";
 import { apiClient } from "@/api/client";
 import { listBins } from "@/api/cabinets";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 import type { Bin, Cabinet } from "@/types";
 
 type EntityType = "item" | "bin";
@@ -49,6 +50,7 @@ export function MoveModal({
   const [notes, setNotes] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  useEscapeKey(onClose);
 
   const { data: cabinets = [] } = useQuery<Cabinet[]>({
     queryKey: ["cabinets"],
@@ -88,14 +90,26 @@ export function MoveModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-      <div className="card w-full max-w-sm p-6 relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-700">
-          <X className="h-5 w-5" />
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="move-modal-title"
+        className="card w-full max-w-sm p-6 relative"
+      >
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-4 right-4 p-1.5 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+        >
+          <X className="h-4 w-4" />
         </button>
         <div className="flex items-center gap-2 mb-4">
-          <MapPin className="h-5 w-5 text-brand-600" />
-          <h2 className="text-lg font-semibold text-slate-900">
+          <MapPin className="h-5 w-5 text-brand-600" aria-hidden="true" />
+          <h2 id="move-modal-title" className="text-lg font-semibold text-slate-900">
             Move {entityType === "item" ? "Item" : "Bin"}
           </h2>
         </div>
@@ -109,8 +123,9 @@ export function MoveModal({
         </p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="label">Destination cabinet *</label>
+            <label htmlFor="move-cabinet" className="label">Destination cabinet *</label>
             <select
+              id="move-cabinet"
               className="input"
               value={toCabinetId}
               onChange={(e) => {
@@ -118,6 +133,7 @@ export function MoveModal({
                 setToBinId("");
               }}
               required
+              autoFocus
             >
               <option value="">Select cabinet…</option>
               {cabinets.map((c) => (
@@ -130,8 +146,9 @@ export function MoveModal({
 
           {entityType === "item" && bins.length > 0 && (
             <div>
-              <label className="label">Destination bin (optional)</label>
+              <label htmlFor="move-bin" className="label">Destination bin (optional)</label>
               <select
+                id="move-bin"
                 className="input"
                 value={toBinId}
                 onChange={(e) => setToBinId(e.target.value === "" ? "" : Number(e.target.value))}
@@ -147,8 +164,9 @@ export function MoveModal({
           )}
 
           <div>
-            <label className="label">Notes (optional)</label>
+            <label htmlFor="move-notes" className="label">Notes (optional)</label>
             <input
+              id="move-notes"
               className="input"
               placeholder="Reason for move"
               value={notes}

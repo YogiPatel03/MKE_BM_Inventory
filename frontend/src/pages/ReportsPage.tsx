@@ -5,7 +5,6 @@ import { getInventoryStatus, getExpenseReport, getHeldValueReport } from "@/api/
 import { listItems } from "@/api/items";
 import { useAuthStore } from "@/store/auth";
 import { Navigate } from "react-router-dom";
-import type { HeldValueReport } from "@/types";
 
 function toISODate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -151,19 +150,19 @@ export function ReportsPage() {
   const [activeTab, setActiveTab] = useState<"status" | "purchases" | "usage" | "held-value">("status");
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
 
-  if (!canView) return <Navigate to="/dashboard" replace />;
-
   const effectiveStart = preset === "month" ? thisMonthStart() : preset === "ytd" ? ytdStart() : startDate;
   const effectiveEnd = preset === "custom" ? endDate : today;
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ["report-status"],
     queryFn: getInventoryStatus,
+    enabled: !!canView,
   });
 
   const { data: allItems = [] } = useQuery({
     queryKey: ["items-for-filter"],
     queryFn: () => listItems({ isActive: true }),
+    enabled: !!canView,
   });
 
   const { data: expenses, isLoading: expensesLoading } = useQuery({
@@ -173,8 +172,10 @@ export function ReportsPage() {
       new Date(effectiveEnd + "T23:59:59").toISOString(),
       selectedItemId,
     ),
-    enabled: activeTab === "purchases" || activeTab === "usage",
+    enabled: !!canView && (activeTab === "purchases" || activeTab === "usage"),
   });
+
+  if (!canView) return <Navigate to="/dashboard" replace />;
 
   return (
     <div className="space-y-6">

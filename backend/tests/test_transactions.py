@@ -10,6 +10,7 @@ from app.core.security import hash_password
 from app.models.cabinet import Cabinet
 from app.models.item import Item
 from app.models.role import Role
+from app.models.room import Room
 from app.models.transaction import TransactionStatus
 from app.models.user import User
 from app.services.transaction_service import checkout_item, return_item
@@ -27,7 +28,10 @@ async def _seed(db: AsyncSession):
                 password_hash=hash_password("pass"), role_id=role.id)
     db.add(user)
 
-    cabinet = Cabinet(name="Cabinet A")
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cabinet = Cabinet(name="Cabinet A", room_id=room.id)
     db.add(cabinet)
     await db.flush()
 
@@ -106,7 +110,10 @@ async def _seed_with_admin(db: AsyncSession):
     alice = User(full_name="Alice", username="alice", password_hash=hash_password("alicepass"), role_id=user_role.id)
     db.add_all([admin, alice])
 
-    cabinet = Cabinet(name="Cabinet A")
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cabinet = Cabinet(name="Cabinet A", room_id=room.id)
     db.add(cabinet)
     await db.flush()
 

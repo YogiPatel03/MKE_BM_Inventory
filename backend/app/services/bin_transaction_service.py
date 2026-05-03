@@ -3,12 +3,14 @@ Bin transaction service — checkout/return of all items in a bin as a unit.
 
 When a bin is checked out:
   1. A BinTransaction record is created.
-  2. For every active item in the bin with quantity_available > 0, a Transaction
-     record is created and linked via bin_transaction_id.
-  3. Item.quantity_available is decremented for each item.
+  2. For every active item in the bin that is NOT already individually checked out,
+     a Transaction record is created and linked via bin_transaction_id.
+  3. Item.quantity_available is decremented for each included item.
+  4. Items already individually checked out are excluded and tracked separately;
+     they remain active as their own individual checkouts.
 
-Return reverses this: all linked CHECKED_OUT/OVERDUE transactions are RETURNED
-and quantities are restored.
+Return reverses this: only the items that were physically included in the bin
+checkout are returned. Individually checked-out items are unaffected.
 """
 
 import logging
@@ -39,7 +41,11 @@ async def checkout_bin(
     processed_by_user_id: int,
     due_at: Optional[datetime],
     notes: Optional[str],
-) -> BinTransaction:
+) -> tuple[BinTransaction, list[int]]:
+    """
+    Check out a bin. Returns (BinTransaction, excluded_item_ids) where
+    excluded_item_ids are items already individually checked out.
+    """
     # Verify bin exists
     bin_result = await db.execute(
         select(Bin)
@@ -68,6 +74,30 @@ async def checkout_bin(
     if existing.scalar_one_or_none():
         raise TransactionConflictError(f"Bin {bin_id} is already checked out.")
 
+    # Identify items already individually checked out (have active individual Transaction)
+    active_items = [i for i in bin_obj.items if i.is_active and i.quantity_available > 0]
+    all_bin_item_ids = [i.id for i in bin_obj.items if i.is_active]
+
+    # Find which items have active individual transactions (not bin transactions)
+    individually_checked_out_ids: list[int] = []
+    if all_bin_item_ids:
+        indiv_result = await db.execute(
+            select(Transaction.item_id).where(
+                Transaction.item_id.in_(all_bin_item_ids),
+                Transaction.status == TransactionStatus.CHECKED_OUT,
+                Transaction.bin_transaction_id == None,  # individual checkout
+            )
+        )
+        individually_checked_out_ids = list(indiv_result.scalars().all())
+
+    # Items to include = active items NOT already individually checked out
+    items_to_include = [
+        i for i in active_items
+        if i.id not in individually_checked_out_ids
+    ]
+
+    included_item_ids = [i.id for i in items_to_include]
+
     bin_txn = BinTransaction(
         bin_id=bin_id,
         user_id=user_id,
@@ -75,13 +105,13 @@ async def checkout_bin(
         status=BinTransactionStatus.CHECKED_OUT,
         due_at=due_at,
         notes=notes,
+        included_item_ids=included_item_ids,
     )
     db.add(bin_txn)
     await db.flush()  # get bin_txn.id
 
-    # Create individual transactions for all active items in the bin
-    active_items = [i for i in bin_obj.items if i.is_active and i.quantity_available > 0]
-    for item in active_items:
+    # Create individual transactions for included items only
+    for item in items_to_include:
         # Lock item row
         item_result = await db.execute(
             select(Item).where(Item.id == item.id).with_for_update()
@@ -112,13 +142,20 @@ async def checkout_bin(
         target_bin_id=bin_id,
         target_cabinet_id=bin_obj.cabinet_id,
         notes=notes,
-        metadata={"bin_transaction_id": bin_txn.id, "item_count": len(active_items)},
+        metadata={
+            "bin_transaction_id": bin_txn.id,
+            "item_count": len(items_to_include),
+            "excluded_item_ids": individually_checked_out_ids,
+        },
         source_type="bin_transaction",
         source_id=bin_txn.id,
     )
 
-    log.info("BinCheckout: bin_txn=%d bin=%d user=%d items=%d", bin_txn.id, bin_id, user_id, len(active_items))
-    return bin_txn
+    log.info(
+        "BinCheckout: bin_txn=%d bin=%d user=%d items=%d excluded=%d",
+        bin_txn.id, bin_id, user_id, len(items_to_include), len(individually_checked_out_ids),
+    )
+    return bin_txn, individually_checked_out_ids
 
 
 async def return_bin(
@@ -150,7 +187,8 @@ async def return_bin(
     if notes:
         bin_txn.notes = (bin_txn.notes or "") + f"\n[Return] {notes}"
 
-    # Return all linked transactions and restore quantities
+    # Only return transactions that were part of this bin checkout (linked via bin_transaction_id).
+    # Items that were individually checked out are NOT part of bin_txn.transactions and are unaffected.
     for txn in bin_txn.transactions:
         if txn.status in (TransactionStatus.CHECKED_OUT, TransactionStatus.OVERDUE):
             item_result = await db.execute(

@@ -9,7 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import hash_password
 from app.models.cabinet import Cabinet
 from app.models.role import Role
+from app.models.room import Room
 from app.models.user import User
+
+
+async def _make_room(db: AsyncSession, name: str = "Test Room") -> Room:
+    room = Room(name=name)
+    db.add(room)
+    await db.flush()
+    return room
 
 
 async def _seed_admin(db: AsyncSession) -> tuple[User, str]:
@@ -64,8 +72,9 @@ async def test_create_cabinet(client: AsyncClient, db: AsyncSession):
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
 
-    r = await client.post("/api/cabinets", json={"name": "Cabinet A", "location": "Room 1"}, headers=headers)
+    r = await client.post("/api/cabinets", json={"name": "Cabinet A", "location": "Room 1", "room_id": room.id}, headers=headers)
     assert r.status_code == 201
     data = r.json()
     assert data["name"] == "Cabinet A"
@@ -78,9 +87,10 @@ async def test_list_cabinets(client: AsyncClient, db: AsyncSession):
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
 
-    await client.post("/api/cabinets", json={"name": "A"}, headers=headers)
-    await client.post("/api/cabinets", json={"name": "B"}, headers=headers)
+    await client.post("/api/cabinets", json={"name": "A", "room_id": room.id}, headers=headers)
+    await client.post("/api/cabinets", json={"name": "B", "room_id": room.id}, headers=headers)
 
     r = await client.get("/api/cabinets", headers=headers)
     assert r.status_code == 200
@@ -108,7 +118,7 @@ async def test_user_cannot_create_cabinet(client: AsyncClient, db: AsyncSession)
     token = await _login(client, "bob", "bobpass1")
     r = await client.post(
         "/api/cabinets",
-        json={"name": "X"},
+        json={"name": "X", "room_id": 1},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 403
@@ -119,8 +129,9 @@ async def test_update_cabinet(client: AsyncClient, db: AsyncSession):
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
 
-    create = await client.post("/api/cabinets", json={"name": "Old Name"}, headers=headers)
+    create = await client.post("/api/cabinets", json={"name": "Old Name", "room_id": room.id}, headers=headers)
     cabinet_id = create.json()["id"]
 
     r = await client.patch(f"/api/cabinets/{cabinet_id}", json={"name": "New Name"}, headers=headers)
@@ -135,8 +146,9 @@ async def test_create_bin(client: AsyncClient, db: AsyncSession):
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
 
-    cab = await client.post("/api/cabinets", json={"name": "Cab"}, headers=headers)
+    cab = await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)
     cabinet_id = cab.json()["id"]
 
     r = await client.post(
@@ -154,9 +166,10 @@ async def test_list_bins_by_cabinet(client: AsyncClient, db: AsyncSession):
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
 
-    cab1 = (await client.post("/api/cabinets", json={"name": "C1"}, headers=headers)).json()
-    cab2 = (await client.post("/api/cabinets", json={"name": "C2"}, headers=headers)).json()
+    cab1 = (await client.post("/api/cabinets", json={"name": "C1", "room_id": room.id}, headers=headers)).json()
+    cab2 = (await client.post("/api/cabinets", json={"name": "C2", "room_id": room.id}, headers=headers)).json()
 
     await client.post("/api/bins", json={"label": "A1", "cabinet_id": cab1["id"]}, headers=headers)
     await client.post("/api/bins", json={"label": "B1", "cabinet_id": cab1["id"]}, headers=headers)
@@ -174,8 +187,9 @@ async def test_create_item(client: AsyncClient, db: AsyncSession):
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
 
-    cab = (await client.post("/api/cabinets", json={"name": "Cab"}, headers=headers)).json()
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
 
     r = await client.post(
         "/api/items",
@@ -194,8 +208,9 @@ async def test_item_quantity_must_be_positive(client: AsyncClient, db: AsyncSess
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
 
-    cab = (await client.post("/api/cabinets", json={"name": "Cab"}, headers=headers)).json()
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
 
     r = await client.post(
         "/api/items",
@@ -210,8 +225,9 @@ async def test_update_item(client: AsyncClient, db: AsyncSession):
     await _seed_admin(db)
     token = await _login(client, "admin", "adminpass")
     headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
 
-    cab = (await client.post("/api/cabinets", json={"name": "Cab"}, headers=headers)).json()
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
         json={"name": "Hammer", "quantity_total": 3, "cabinet_id": cab["id"]},

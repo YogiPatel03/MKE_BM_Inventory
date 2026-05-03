@@ -1,11 +1,11 @@
 import { apiClient } from "./client";
-import type { BinTransaction } from "@/types";
+import type { BinCheckoutResult, BinTransaction } from "@/types";
 
 export async function checkoutBin(data: {
   binId: number;
   dueAt?: string;
   notes?: string;
-}): Promise<BinTransaction> {
+}): Promise<BinCheckoutResult> {
   const { data: res } = await apiClient.post("/bin-transactions", {
     bin_id: data.binId,
     due_at: data.dueAt,

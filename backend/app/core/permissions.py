@@ -43,12 +43,22 @@ def require_approve_requests(user: User) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Request approval permission required")
 
 
-def can_process_transaction_for(actor: User, target_user_id: int) -> bool:
+def is_group_lead(user: User) -> bool:
+    return user.role.can_approve_requests and user.group_name is not None
+
+
+def can_process_transaction_for(
+    actor: User, target_user_id: int, target_group: str | None = None
+) -> bool:
     """
     Returns True if `actor` is allowed to initiate a transaction on behalf of
     target_user_id. Users can always act for themselves; coordinators and admins
-    can act for anyone.
+    can act for anyone; GROUP_LEAD can act for members of their own group.
     """
     if actor.id == target_user_id:
         return True
-    return actor.role.can_process_any_transaction or actor.role.can_manage_users
+    if actor.role.can_process_any_transaction or actor.role.can_manage_users:
+        return True
+    if is_group_lead(actor) and target_group is not None and target_group == actor.group_name:
+        return True
+    return False

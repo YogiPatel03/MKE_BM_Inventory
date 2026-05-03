@@ -13,6 +13,9 @@ import { BinQRModal } from "@/components/modals/BinQRModal";
 import { ItemModal } from "@/components/modals/ItemModal";
 import { MarkAsUsedModal } from "@/components/modals/MarkAsUsedModal";
 import { MoveModal } from "@/components/modals/MoveModal";
+import { PromptModal } from "@/components/modals/PromptModal";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
+import { toast } from "@/store/toast";
 
 function EditCabinetModal({ cabinet, onClose }: { cabinet: Cabinet; onClose: () => void }) {
   const qc = useQueryClient();
@@ -21,6 +24,7 @@ function EditCabinetModal({ cabinet, onClose }: { cabinet: Cabinet; onClose: () 
   const [description, setDescription] = useState(cabinet.description ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  useEscapeKey(onClose);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,21 +48,29 @@ function EditCabinetModal({ cabinet, onClose }: { cabinet: Cabinet; onClose: () 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-      <div className="card w-full max-w-md p-6 relative">
-        <h2 className="text-lg font-semibold text-slate-900 mb-4">Edit Cabinet</h2>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-cabinet-title"
+        className="card w-full max-w-md p-6 relative"
+      >
+        <h2 id="edit-cabinet-title" className="text-lg font-semibold text-slate-900 mb-4">Edit Cabinet</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="label">Name *</label>
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
+            <label htmlFor="edit-cabinet-name" className="label">Name *</label>
+            <input id="edit-cabinet-name" className="input" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
           </div>
           <div>
-            <label className="label">Location</label>
-            <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Room 204, Shelf B" />
+            <label htmlFor="edit-cabinet-location" className="label">Location</label>
+            <input id="edit-cabinet-location" className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Room 204, Shelf B" />
           </div>
           <div>
-            <label className="label">Description</label>
-            <textarea className="input resize-none" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+            <label htmlFor="edit-cabinet-desc" className="label">Description</label>
+            <textarea id="edit-cabinet-desc" className="input resize-none" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
           <div className="flex gap-3 pt-2">
@@ -73,7 +85,7 @@ function EditCabinetModal({ cabinet, onClose }: { cabinet: Cabinet; onClose: () 
   );
 }
 
-function ItemRow({ item, inBin }: { item: Item; inBin: boolean }) {
+function ItemRow({ item }: { item: Item; inBin?: boolean }) {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [markUsedOpen, setMarkUsedOpen] = useState(false);
 
@@ -114,8 +126,8 @@ function ItemRow({ item, inBin }: { item: Item; inBin: boolean }) {
             Use
           </button>
         )}
-        {/* Non-consumable, not in bin: individual checkout */}
-        {!item.isConsumable && !inBin && item.quantityAvailable > 0 && (
+        {/* Non-consumable: individual checkout (allowed even if in a bin, unless the bin is currently checked out) */}
+        {!item.isConsumable && item.quantityAvailable > 0 && (
           <button
             onClick={() => setCheckoutOpen(true)}
             className="btn-primary text-xs py-1 px-3"
@@ -156,12 +168,17 @@ function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn
 
   const checkoutMut = useMutation({
     mutationFn: () => checkoutBin({ binId: bin.id, notes: checkoutNotes || undefined }),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["items", "cabinet", cabinetId] });
       qc.invalidateQueries({ queryKey: ["bin-transactions"] });
       onBinTxnChange();
       setShowCheckoutForm(false);
       setCheckoutNotes("");
+      if (result.excludedItemIds && result.excludedItemIds.length > 0) {
+        toast.success(
+          `Bin checked out (partial: ${result.excludedItemIds.length} item(s) already individually checked out were excluded)`
+        );
+      }
     },
   });
 
@@ -334,6 +351,7 @@ export function CabinetDetailPage() {
   const [binModalOpen, setBinModalOpen] = useState(false);
   const [itemModalOpen, setItemModalOpen] = useState(false);
   const [editCabinetOpen, setEditCabinetOpen] = useState(false);
+  const [requestingBinId, setRequestingBinId] = useState<number | null>(null);
 
   const { data: allItems = [] } = useQuery({
     queryKey: ["items", "cabinet", cabinetId],
@@ -346,14 +364,16 @@ export function CabinetDetailPage() {
     enabled: canProcess,
   });
 
-  const handleRequestBin = async (binId: number) => {
-    const reason = window.prompt("Reason for request (optional):");
-    if (reason === null) return;
+  const handleRequestBin = (binId: number) => setRequestingBinId(binId);
+
+  const doRequestBin = async (reason: string) => {
+    const binId = requestingBinId!;
+    setRequestingBinId(null);
     try {
       await submitRequest({ binId, reason: reason || undefined });
       navigate("/requests");
     } catch (e: any) {
-      alert(e?.response?.data?.detail ?? "Failed to submit request");
+      toast.error(e?.response?.data?.detail ?? "Failed to submit request");
     }
   };
 
@@ -457,6 +477,16 @@ export function CabinetDetailPage() {
       {binModalOpen && <BinModal cabinetId={cabinetId} onClose={() => setBinModalOpen(false)} />}
       {itemModalOpen && <ItemModal cabinetId={cabinetId} bins={bins} onClose={() => setItemModalOpen(false)} />}
       {editCabinetOpen && cabinet && <EditCabinetModal cabinet={cabinet} onClose={() => setEditCabinetOpen(false)} />}
+      {requestingBinId !== null && (
+        <PromptModal
+          title="Request Bin"
+          label="Reason for request"
+          placeholder="e.g. needed for event setup"
+          confirmLabel="Submit request"
+          onConfirm={doRequestBin}
+          onCancel={() => setRequestingBinId(null)}
+        />
+      )}
     </div>
   );
 }

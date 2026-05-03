@@ -4,6 +4,8 @@ import { Link } from "react-router-dom";
 import { ChevronRight, DoorOpen, Edit2, Plus, Trash2, X } from "lucide-react";
 import { listRooms, createRoom, updateRoom, deleteRoom } from "@/api/rooms";
 import { useAuthStore } from "@/store/auth";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
+import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import type { Room } from "@/types";
 
 function RoomFormModal({
@@ -18,6 +20,7 @@ function RoomFormModal({
   const [description, setDescription] = useState(room?.description ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  useEscapeKey(onClose);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,28 +42,43 @@ function RoomFormModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-      <div className="card w-full max-w-md p-6 relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-700">
-          <X className="h-5 w-5" />
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="room-form-title"
+        className="card w-full max-w-md p-6 relative"
+      >
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-4 right-4 p-1.5 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+        >
+          <X className="h-4 w-4" />
         </button>
-        <h2 className="text-lg font-semibold text-slate-900 mb-5">
+        <h2 id="room-form-title" className="text-lg font-semibold text-slate-900 mb-5">
           {room ? "Edit Room" : "Add Room"}
         </h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="label">Room Name *</label>
+            <label htmlFor="room-name" className="label">Room Name *</label>
             <input
+              id="room-name"
               className="input"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Main Hall, Storage Room"
               required
+              autoFocus
             />
           </div>
           <div>
-            <label className="label">Description</label>
+            <label htmlFor="room-description" className="label">Description</label>
             <textarea
+              id="room-description"
               className="input resize-none"
               rows={2}
               value={description}
@@ -118,15 +136,15 @@ function RoomCard({
             <>
               <button
                 onClick={() => onEdit(room)}
-                className="p-1.5 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-                title="Edit room"
+                aria-label={`Edit ${room.name}`}
+                className="p-2.5 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
               >
                 <Edit2 className="h-4 w-4" />
               </button>
               <button
                 onClick={() => onDelete(room)}
-                className="p-1.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                title="Delete room"
+                aria-label={`Delete ${room.name}`}
+                className="p-2.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
               >
                 <Trash2 className="h-4 w-4" />
               </button>
@@ -155,6 +173,7 @@ export function RoomsPage() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingRoom, setEditingRoom] = useState<Room | undefined>();
+  const [deletingRoom, setDeletingRoom] = useState<Room | null>(null);
 
   const { data: rooms = [], isLoading } = useQuery({
     queryKey: ["rooms"],
@@ -166,10 +185,7 @@ export function RoomsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["rooms"] }),
   });
 
-  const handleDelete = (room: Room) => {
-    if (!confirm(`Delete room "${room.name}"? This will fail if it still contains cabinets.`)) return;
-    deleteMut.mutate(room.id);
-  };
+  const handleDelete = (room: Room) => setDeletingRoom(room);
 
   const handleEdit = (room: Room) => {
     setEditingRoom(room);
@@ -237,6 +253,20 @@ export function RoomsPage() {
             setFormOpen(false);
             setEditingRoom(undefined);
           }}
+        />
+      )}
+
+      {deletingRoom && (
+        <ConfirmModal
+          title="Delete Room"
+          message={`Delete "${deletingRoom.name}"? This will fail if the room still contains cabinets.`}
+          confirmLabel="Delete"
+          isDangerous
+          onConfirm={() => {
+            deleteMut.mutate(deletingRoom.id);
+            setDeletingRoom(null);
+          }}
+          onCancel={() => setDeletingRoom(null)}
         />
       )}
     </div>

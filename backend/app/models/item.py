@@ -51,8 +51,8 @@ class Item(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Denormalized availability cache. Transaction is the source of truth for history.
-    quantity_total: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    quantity_available: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    quantity_total: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=1)
+    quantity_available: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=1)
 
     cabinet_id: Mapped[int] = mapped_column(ForeignKey("cabinets.id"), nullable=False, index=True)
     bin_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bins.id"), nullable=True, index=True)
@@ -74,7 +74,7 @@ class Item(Base):
 
     # Low-stock threshold. If None, computed dynamically as max(1, quantity_total // 10).
     # Set explicitly for consumables where quantity_total decreases over time.
-    low_stock_threshold: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    low_stock_threshold: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
 
     # Prior location stored when item is auto-moved to "Restock Me" cabinet.
     # Cleared when item is restored to its original location.

@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -51,7 +51,7 @@ class InventoryRequest(Base):
         ForeignKey("bins.id"), nullable=True, index=True
     )
 
-    quantity_requested: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    quantity_requested: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=1)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=RequestStatus.PENDING, index=True
     )

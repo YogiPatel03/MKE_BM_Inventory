@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user as get_current_active_user, get_db
-from app.core.permissions import require_approve_requests
+from app.core.permissions import is_group_lead, require_approve_requests
 from app.models.inventory_request import InventoryRequest, RequestStatus
 from app.models.user import User
 from app.schemas.inventory_request import (
@@ -81,8 +81,14 @@ async def list_requests(
 ):
     query = select(InventoryRequest).order_by(InventoryRequest.created_at.desc())
 
-    # Non-approvers only see their own requests
-    if not (current_user.role.can_approve_requests or current_user.role.can_manage_users):
+    if current_user.role.can_manage_users:
+        pass  # admins see all
+    elif is_group_lead(current_user):
+        # GROUP_LEAD sees only their own group's requests
+        query = query.join(User, InventoryRequest.requester_id == User.id).where(
+            User.group_name == current_user.group_name
+        )
+    elif not current_user.role.can_approve_requests:
         query = query.where(InventoryRequest.requester_id == current_user.id)
 
     if status:

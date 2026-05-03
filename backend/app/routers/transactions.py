@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.permissions import can_process_transaction_for, require_view_all_transactions
+from app.core.permissions import can_process_transaction_for, is_group_lead, require_view_all_transactions
 from app.dependencies import get_current_user, get_db
 from app.models.transaction import Transaction, TransactionStatus
 from app.models.user import User
@@ -39,11 +39,16 @@ async def list_transactions(
 ) -> list[Transaction]:
     query = select(Transaction)
 
-    # Non-privileged users only see their own transactions
-    if not (current_user.role.can_view_all_transactions or current_user.role.can_manage_users):
+    if current_user.role.can_view_all_transactions or current_user.role.can_manage_users:
+        if user_id_filter:
+            query = query.where(Transaction.user_id == user_id_filter)
+    elif is_group_lead(current_user):
+        # GROUP_LEAD sees only their own group's transactions
+        query = query.join(User, Transaction.user_id == User.id).where(
+            User.group_name == current_user.group_name
+        )
+    else:
         query = query.where(Transaction.user_id == current_user.id)
-    elif user_id_filter:
-        query = query.where(Transaction.user_id == user_id_filter)
 
     if status_filter:
         query = query.where(Transaction.status == status_filter)
@@ -61,7 +66,14 @@ async def checkout(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Transaction:
-    if not can_process_transaction_for(current_user, body.user_id):
+    # For GROUP_LEAD, look up the target user's group to enable group-scoped checkout
+    target_group: str | None = None
+    if is_group_lead(current_user) and current_user.id != body.user_id:
+        target_result = await db.execute(select(User).where(User.id == body.user_id))
+        target_user = target_result.scalar_one_or_none()
+        target_group = target_user.group_name if target_user else None
+
+    if not can_process_transaction_for(current_user, body.user_id, target_group):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "You can only check out items for yourself unless you have coordinator permissions",
@@ -100,15 +112,18 @@ async def return_transaction(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Transaction:
-    # Peek at the transaction to check ownership before locking
+    # Peek at the transaction + borrower to check ownership before locking
     peek = await db.execute(
-        select(Transaction.user_id).where(Transaction.id == transaction_id)
+        select(Transaction.user_id, User.group_name)
+        .join(User, Transaction.user_id == User.id)
+        .where(Transaction.id == transaction_id)
     )
     row = peek.one_or_none()
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Transaction not found")
 
-    if not can_process_transaction_for(current_user, row[0]):
+    borrower_id, borrower_group = row
+    if not can_process_transaction_for(current_user, borrower_id, borrower_group):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "You can only return items for yourself unless you have coordinator permissions",

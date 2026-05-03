@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { createBin } from "@/api/cabinets";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 interface Props {
   cabinetId: number;
@@ -15,6 +16,7 @@ export function BinModal({ cabinetId, onClose }: Props) {
   const [description, setDescription] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  useEscapeKey(onClose);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,24 +39,36 @@ export function BinModal({ cabinetId, onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-      <div className="card w-full max-w-md p-6 relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-700">
-          <X className="h-5 w-5" />
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bin-modal-title"
+        className="card w-full max-w-md p-6 relative"
+      >
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-4 right-4 p-1.5 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+        >
+          <X className="h-4 w-4" />
         </button>
-        <h2 className="text-lg font-semibold text-slate-900 mb-5">Add Bin</h2>
+        <h2 id="bin-modal-title" className="text-lg font-semibold text-slate-900 mb-5">Add Bin</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="label">Label *</label>
-            <input className="input" placeholder="e.g. A1, Top shelf" value={label} onChange={(e) => setLabel(e.target.value)} required />
+            <label htmlFor="bin-label" className="label">Label *</label>
+            <input id="bin-label" className="input" placeholder="e.g. A1, Top shelf" value={label} onChange={(e) => setLabel(e.target.value)} required autoFocus />
           </div>
           <div>
-            <label className="label">Location note</label>
-            <input className="input" placeholder="e.g. Left side, second row" value={locationNote} onChange={(e) => setLocationNote(e.target.value)} />
+            <label htmlFor="bin-location-note" className="label">Location note</label>
+            <input id="bin-location-note" className="input" placeholder="e.g. Left side, second row" value={locationNote} onChange={(e) => setLocationNote(e.target.value)} />
           </div>
           <div>
-            <label className="label">Description</label>
-            <textarea className="input resize-none" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+            <label htmlFor="bin-description" className="label">Description</label>
+            <textarea id="bin-description" className="input resize-none" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
           <div className="flex gap-3 pt-2">

@@ -6,6 +6,7 @@ The ledger never replaces domain tables — it references them.
 """
 
 import logging
+from decimal import Decimal
 from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity_log import ActivityLog
 
 log = logging.getLogger(__name__)
+
+
+def _json_safe(obj: Any) -> Any:
+    """Recursively convert Decimal to float so metadata can be stored as JSON."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return obj
 
 
 async def log_activity(
@@ -24,7 +36,7 @@ async def log_activity(
     target_bin_id: Optional[int] = None,
     target_cabinet_id: Optional[int] = None,
     target_user_id: Optional[int] = None,
-    quantity_delta: Optional[int] = None,
+    quantity_delta: Optional[float] = None,
     cost_impact: Optional[float] = None,
     notes: Optional[str] = None,
     metadata: Optional[dict[str, Any]] = None,
@@ -45,7 +57,7 @@ async def log_activity(
         quantity_delta=quantity_delta,
         cost_impact=cost_impact,
         notes=notes,
-        metadata_=metadata,
+        metadata_=_json_safe(metadata) if metadata else None,
         source_type=source_type,
         source_id=source_id,
     )

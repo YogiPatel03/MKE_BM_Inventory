@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -41,9 +41,9 @@ class StockAdjustment(Base):
         ForeignKey("users.id"), nullable=False, index=True
     )
 
-    delta: Mapped[int] = mapped_column(Integer, nullable=False)
-    quantity_before: Mapped[int] = mapped_column(Integer, nullable=False)
-    quantity_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    delta: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    quantity_before: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    quantity_after: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
 
     reason: Mapped[str] = mapped_column(String(50), nullable=False, default=AdjustmentReason.CORRECTION)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

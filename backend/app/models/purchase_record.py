@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from decimal import Decimal
+
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -34,7 +36,7 @@ class PurchaseRecord(Base):
         ForeignKey("receipt_records.id"), nullable=True
     )
 
-    quantity_purchased: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity_purchased: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     unit_price: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
     total_price: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
 

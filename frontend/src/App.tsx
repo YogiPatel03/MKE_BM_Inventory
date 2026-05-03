@@ -12,7 +12,7 @@ import { ItemDetailPage } from "@/pages/ItemDetailPage";
 import { TransactionsPage } from "@/pages/TransactionsPage";
 import { AdminPage } from "@/pages/AdminPage";
 import { SettingsPage } from "@/pages/SettingsPage";
-import { InventoryListPage } from "@/pages/InventoryListPage";
+// InventoryListPage now merged into InventoryPage
 import { RequestsPage } from "@/pages/RequestsPage";
 import { ReportsPage } from "@/pages/ReportsPage";
 import { QRScanPage } from "@/pages/QRScanPage";
@@ -56,15 +56,17 @@ export default function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
 
-          {/* Rooms & Cabinets */}
-          <Route path="rooms" element={<RoomsPage />} />
-          <Route path="rooms/:id" element={<RoomDetailPage />} />
-          {/* /inventory redirects to /rooms for backwards compat */}
+          {/* Inventory — search-first page (merges old rooms list + inventory list) */}
           <Route path="inventory" element={<InventoryPage />} />
           <Route path="inventory/cabinets/:id" element={<CabinetDetailPage />} />
           <Route path="inventory/items/:id" element={<ItemDetailPage />} />
 
-          <Route path="inventory-list" element={<InventoryListPage />} />
+          {/* Rooms — kept for detail view and direct links */}
+          <Route path="rooms" element={<RoomsPage />} />
+          <Route path="rooms/:id" element={<RoomDetailPage />} />
+
+          {/* Legacy redirects */}
+          <Route path="inventory-list" element={<Navigate to="/inventory" replace />} />
           <Route path="transactions" element={<TransactionsPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="settings" element={<SettingsPage />} />

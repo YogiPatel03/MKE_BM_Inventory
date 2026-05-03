@@ -14,6 +14,7 @@ import {
   Shield,
   X,
 } from "lucide-react";
+
 import { useAuthStore } from "@/store/auth";
 import { clsx } from "clsx";
 import { useNavigate } from "react-router-dom";
@@ -46,18 +47,18 @@ export function MobileNav() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [moreOpen]);
 
-  // Primary tabs (always visible)
+  // Primary tabs (always visible) — order: Inventory, Checklist, Home, Requests, More
   const primaryItems = [
+    { to: "/inventory", label: "Inventory", icon: PackageSearch },
+    { to: "/checklist", label: "Checklist", icon: ClipboardCheck },
     { to: "/dashboard", label: "Home", icon: LayoutDashboard },
-    { to: "/rooms", label: "Rooms", icon: DoorOpen },
-    { to: "/transactions", label: "Activity", icon: ClipboardList },
     { to: "/requests", label: "Requests", icon: Inbox },
   ];
 
   // Secondary items (in "More" drawer)
   const secondaryItems = [
-    { to: "/inventory-list", label: "All Items", icon: PackageSearch },
-    { to: "/checklist", label: "Checklist", icon: ClipboardCheck },
+    { to: "/rooms", label: "Rooms", icon: DoorOpen },
+    { to: "/transactions", label: "Activity", icon: ClipboardList },
     ...(canViewReports ? [{ to: "/reports", label: "Reports", icon: FileText }] : []),
     ...(isAdmin ? [{ to: "/admin", label: "Admin", icon: Shield }] : []),
     { to: "/settings", label: "Settings", icon: Settings },
@@ -77,24 +78,33 @@ export function MobileNav() {
   return (
     <>
       {/* Backdrop */}
-      {moreOpen && (
-        <div
-          className="md:hidden fixed inset-0 z-30 bg-slate-900/40"
-          onClick={() => setMoreOpen(false)}
-        />
-      )}
+      <div
+        className={clsx(
+          "md:hidden fixed inset-0 z-30 bg-slate-900/40 transition-opacity duration-200",
+          moreOpen ? "opacity-100" : "opacity-0 pointer-events-none"
+        )}
+        onClick={() => setMoreOpen(false)}
+        aria-hidden="true"
+      />
 
       {/* More drawer (slides up) */}
-      {moreOpen && (
-        <div
-          ref={drawerRef}
-          className="md:hidden fixed bottom-16 inset-x-0 z-40 bg-white border-t border-slate-200 rounded-t-xl shadow-xl"
-        >
+      <div
+        ref={drawerRef}
+        className={clsx(
+          "md:hidden fixed bottom-16 inset-x-0 z-40 bg-white border-t border-slate-200 rounded-t-xl shadow-xl",
+          "transition-all duration-200 ease-out",
+          moreOpen ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0 pointer-events-none"
+        )}
+        role="dialog"
+        aria-modal="true"
+        aria-label="More navigation"
+      >
           <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
             <span className="text-sm font-semibold text-slate-700">More</span>
             <button
               onClick={() => setMoreOpen(false)}
-              className="p-1 text-slate-400 hover:text-slate-700"
+              aria-label="Close menu"
+              className="p-2 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
             >
               <X className="h-4 w-4" />
             </button>
@@ -127,7 +137,6 @@ export function MobileNav() {
             </button>
           </nav>
         </div>
-      )}
 
       {/* Bottom tab bar */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 flex safe-bottom">
@@ -137,12 +146,13 @@ export function MobileNav() {
             to={to}
             className={({ isActive }) =>
               clsx(
-                "flex-1 flex flex-col items-center justify-center py-2 gap-0.5 text-xs font-medium transition-colors",
+                "flex-1 flex flex-col items-center justify-center py-3 gap-0.5 text-xs font-medium transition-colors min-h-[56px]",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500",
                 isActive ? "text-brand-600" : "text-slate-500"
               )
             }
           >
-            <Icon className="h-5 w-5" />
+            <Icon className="h-5 w-5" aria-hidden="true" />
             {label}
           </NavLink>
         ))}
@@ -150,12 +160,15 @@ export function MobileNav() {
         {/* More button */}
         <button
           onClick={() => setMoreOpen((v) => !v)}
+          aria-expanded={moreOpen}
+          aria-haspopup="dialog"
           className={clsx(
-            "flex-1 flex flex-col items-center justify-center py-2 gap-0.5 text-xs font-medium transition-colors",
+            "flex-1 flex flex-col items-center justify-center py-3 gap-0.5 text-xs font-medium transition-colors min-h-[56px]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500",
             secondaryActive || moreOpen ? "text-brand-600" : "text-slate-500"
           )}
         >
-          <MoreHorizontal className="h-5 w-5" />
+          <MoreHorizontal className="h-5 w-5" aria-hidden="true" />
           More
         </button>
       </nav>

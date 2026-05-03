@@ -22,11 +22,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity_log import ActivityType
 from app.models.cabinet import Cabinet
 from app.models.item import Item
+from app.models.room import Room
 from app.services.activity_service import log_activity
 
 log = logging.getLogger(__name__)
 
 RESTOCK_CABINET_NAME = "Restock Me"
+SYSTEM_ROOM_NAME = "System"
+
+
+async def _get_or_create_system_room(db: AsyncSession) -> Room:
+    """Idempotent: returns the hidden 'System' room used for auto-managed cabinets."""
+    result = await db.execute(select(Room).where(Room.name == SYSTEM_ROOM_NAME))
+    room = result.scalar_one_or_none()
+    if room:
+        return room
+    room = Room(name=SYSTEM_ROOM_NAME, description="Auto-managed system room. Do not delete.")
+    db.add(room)
+    await db.flush()
+    await db.refresh(room)
+    log.info("Created system room id=%d", room.id)
+    return room
 
 
 async def get_or_create_restock_cabinet(db: AsyncSession) -> Cabinet:
@@ -38,10 +54,12 @@ async def get_or_create_restock_cabinet(db: AsyncSession) -> Cabinet:
     if cabinet:
         return cabinet
 
+    system_room = await _get_or_create_system_room(db)
     cabinet = Cabinet(
         name=RESTOCK_CABINET_NAME,
         location="Auto-managed",
         description="Items placed here automatically when stock reaches zero. Return to original location after restocking.",
+        room_id=system_room.id,
     )
     db.add(cabinet)
     await db.flush()

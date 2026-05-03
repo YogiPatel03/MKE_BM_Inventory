@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -32,7 +32,7 @@ class UsageEvent(Base):
         ForeignKey("users.id"), nullable=True
     )
 
-    quantity_used: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    quantity_used: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=1)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Reversal support — a reversal is a compensating event that restores stock.

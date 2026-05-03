@@ -3,8 +3,10 @@ Checklists router — weekly task checklists per group.
 
 Permission model:
   - Admins / Coordinators: view all checklists, assign users, add items, delete manual items
-  - Group Leads: view assigned checklists, add items inside existing checklists
-  - Users: view assigned checklists, complete items (add notes)
+  - Group Leads: view checklists for their own group (assigned OR same group_name — allows auto-return task visibility),
+    add/edit/delete items only on checklists they are assigned to AND that belong to their own group,
+    assign only same-group users
+  - Users: view checklists for their own group, complete items only on assigned checklists
 """
 
 from datetime import datetime, timezone
@@ -16,7 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
-from app.models.checklist import Checklist, ChecklistAssignment, ChecklistItem, GroupName
+from app.models.checklist import (
+    Checklist,
+    ChecklistAssignment,
+    ChecklistItem,
+    GroupName,
+    Subchecklist,
+    SubchecklistType,
+)
 from app.models.user import User
 from app.schemas.checklist import (
     ChecklistAssignCreate,
@@ -24,8 +33,11 @@ from app.schemas.checklist import (
     ChecklistItemComplete,
     ChecklistItemCreate,
     ChecklistItemOut,
+    ChecklistItemUpdate,
     ChecklistOut,
     ChecklistSummary,
+    SubchecklistCreate,
+    SubchecklistOut,
 )
 from app.services.checklist_service import (
     complete_checklist_item,
@@ -41,12 +53,28 @@ def _can_manage(user: User) -> bool:
 
 
 def _can_add_items(user: User) -> bool:
-    """Coordinators, admins, and group leads can add items to existing checklists."""
+    """Coordinators, admins, and group leads can add items to checklists they're on."""
     return user.role.can_manage_users or user.role.can_manage_inventory or user.role.can_approve_requests
 
 
 def _is_assigned(checklist: Checklist, user_id: int) -> bool:
     return any(a.user_id == user_id for a in checklist.assignments)
+
+
+def _can_manage_tasks_on(user: User, checklist: Checklist) -> bool:
+    """
+    Admins/coordinators can manage tasks on any checklist.
+    Group leads can manage tasks only on checklists they are assigned to AND that belong to their own group.
+    """
+    if _can_manage(user):
+        return True
+    if (
+        user.role.can_approve_requests
+        and _is_assigned(checklist, user.id)
+        and user.group_name == checklist.group_name
+    ):
+        return True
+    return False
 
 
 @router.get("", response_model=List[ChecklistSummary])
@@ -62,7 +90,7 @@ async def list_checklists(
     """
     if not week_start:
         # Ensure current week checklists exist
-        checklists = await get_or_create_weekly_checklists(db)
+        await get_or_create_weekly_checklists(db)
         await db.commit()
 
     query = (
@@ -89,8 +117,11 @@ async def list_checklists(
 
     result = []
     for cl in rows:
-        # Non-managers only see checklists they are assigned to
-        if not _can_manage(current_user) and not _is_assigned(cl, current_user.id):
+        if (
+            not _can_manage(current_user)
+            and not _is_assigned(cl, current_user.id)
+            and cl.group_name != current_user.group_name
+        ):
             continue
 
         result.append(ChecklistSummary(
@@ -118,15 +149,20 @@ async def get_checklist(
         select(Checklist)
         .where(Checklist.id == checklist_id)
         .options(
-            selectinload(Checklist.items),
+            selectinload(Checklist.items).selectinload(ChecklistItem.assignee),
             selectinload(Checklist.assignments).selectinload(ChecklistAssignment.user),
+            selectinload(Checklist.subchecklists).selectinload(Subchecklist.items),
         )
     )
     checklist = result.scalar_one_or_none()
     if not checklist:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist not found")
 
-    if not _can_manage(current_user) and not _is_assigned(checklist, current_user.id):
+    if (
+        not _can_manage(current_user)
+        and not _is_assigned(checklist, current_user.id)
+        and checklist.group_name != current_user.group_name
+    ):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not assigned to this checklist")
 
     return checklist
@@ -142,12 +178,37 @@ async def add_checklist_item(
     if not _can_add_items(current_user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to add checklist items")
 
-    result = await db.execute(select(Checklist).where(Checklist.id == checklist_id))
+    result = await db.execute(
+        select(Checklist).where(Checklist.id == checklist_id)
+        .options(selectinload(Checklist.assignments))
+    )
     checklist = result.scalar_one_or_none()
     if not checklist:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist not found")
 
-    # Count existing items for ordering
+    # Group leads can only add items to checklists they are on AND that belong to their own group
+    if not _can_manage_tasks_on(current_user, checklist):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only add tasks to checklists you are assigned to in your own group")
+
+    # Validate subchecklist if provided
+    if body.subchecklist_id:
+        sub_result = await db.execute(
+            select(Subchecklist).where(
+                Subchecklist.id == body.subchecklist_id,
+                Subchecklist.checklist_id == checklist_id,
+            )
+        )
+        if not sub_result.scalar_one_or_none():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Subchecklist not found in this checklist")
+
+    # Validate assignee if provided: must be assigned to this checklist (unless admin)
+    if body.assignee_id and not _can_manage(current_user):
+        if not _is_assigned(checklist, body.assignee_id):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Assignee must be assigned to this checklist"
+            )
+
     count_result = await db.execute(
         select(ChecklistItem).where(ChecklistItem.checklist_id == checklist_id)
     )
@@ -155,15 +216,66 @@ async def add_checklist_item(
 
     item = ChecklistItem(
         checklist_id=checklist_id,
+        subchecklist_id=body.subchecklist_id,
         title=body.title,
         description=body.description,
         item_order=body.item_order if body.item_order is not None else existing_count,
+        assignee_id=body.assignee_id,
         is_auto_generated=False,
     )
     db.add(item)
     await db.commit()
-    await db.refresh(item)
+    await db.refresh(item, ["assignee"])
     return item
+
+
+@router.patch("/{checklist_id}/items/{item_id}", response_model=ChecklistItemOut)
+async def update_checklist_item(
+    checklist_id: int,
+    item_id: int,
+    body: ChecklistItemUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChecklistItem:
+    """Update title, description, or assignee of a checklist item."""
+    cl_result = await db.execute(
+        select(Checklist).where(Checklist.id == checklist_id)
+        .options(selectinload(Checklist.assignments))
+    )
+    checklist = cl_result.scalar_one_or_none()
+    if not checklist:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist not found")
+
+    if not _can_manage_tasks_on(current_user, checklist):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to edit tasks on this checklist")
+
+    item_result = await db.execute(
+        select(ChecklistItem).where(
+            ChecklistItem.id == item_id,
+            ChecklistItem.checklist_id == checklist_id,
+        )
+    )
+    task = item_result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist item not found")
+
+    if body.title is not None:
+        task.title = body.title
+    if body.description is not None:
+        task.description = body.description
+    if body.assignee_id is not None:
+        # Validate assignee is on this checklist (admins bypass)
+        if not _can_manage(current_user):
+            if not _is_assigned(checklist, body.assignee_id):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "Assignee must be assigned to this checklist"
+                )
+        task.assignee_id = body.assignee_id
+
+    await db.commit()
+    await db.refresh(task, ["assignee"])
+    return task
 
 
 @router.patch("/{checklist_id}/items/{item_id}/complete", response_model=ChecklistItemOut)
@@ -175,7 +287,6 @@ async def complete_item(
     current_user: User = Depends(get_current_user),
 ) -> ChecklistItem:
     """Mark a checklist item as completed. Assigned users can complete items."""
-    # Verify checklist access
     cl_result = await db.execute(
         select(Checklist)
         .where(Checklist.id == checklist_id)
@@ -186,9 +297,8 @@ async def complete_item(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist not found")
 
     if not _can_manage(current_user) and not _is_assigned(checklist, current_user.id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not assigned to this checklist")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You must be assigned to this checklist to complete tasks")
 
-    # Get the item
     item_result = await db.execute(
         select(ChecklistItem).where(
             ChecklistItem.id == item_id,
@@ -199,7 +309,17 @@ async def complete_item(
     if not task:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist item not found")
 
-    # Request Telegram proof for auto-generated return tasks
+    if (
+        task.is_auto_generated
+        and task.auto_type in ("ITEM_RETURN", "BIN_RETURN")
+        and not task.is_completed
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Return the item through the checkout return flow first. "
+            "This task will complete automatically when the return is processed.",
+        )
+
     request_proof = task.is_auto_generated and task.auto_type in ("ITEM_RETURN", "BIN_RETURN")
 
     task = await complete_checklist_item(
@@ -213,7 +333,6 @@ async def complete_item(
     await db.commit()
     await db.refresh(task)
 
-    # Fire Telegram proof request for return tasks
     if request_proof:
         await notify_checklist_return_proof(task, current_user)
 
@@ -227,9 +346,21 @@ async def delete_checklist_item(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    """Delete a manual (non-auto-generated) checklist item. Admin/coordinator only."""
-    if not _can_manage(current_user):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and coordinators can delete checklist items")
+    """
+    Delete a manual (non-auto-generated) checklist item.
+    Admins/coordinators can delete any manual task.
+    Group leads can delete manual tasks on checklists they are assigned to.
+    """
+    cl_result = await db.execute(
+        select(Checklist).where(Checklist.id == checklist_id)
+        .options(selectinload(Checklist.assignments))
+    )
+    checklist = cl_result.scalar_one_or_none()
+    if not checklist:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist not found")
+
+    if not _can_manage_tasks_on(current_user, checklist):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to delete tasks on this checklist")
 
     item_result = await db.execute(
         select(ChecklistItem).where(
@@ -251,6 +382,50 @@ async def delete_checklist_item(
     await db.commit()
 
 
+@router.post("/{checklist_id}/subchecklists", response_model=SubchecklistOut, status_code=status.HTTP_201_CREATED)
+async def create_subchecklist(
+    checklist_id: int,
+    body: SubchecklistCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Subchecklist:
+    """Create a custom subchecklist within a checklist."""
+    cl_result = await db.execute(
+        select(Checklist).where(Checklist.id == checklist_id)
+        .options(selectinload(Checklist.assignments))
+    )
+    checklist = cl_result.scalar_one_or_none()
+    if not checklist:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist not found")
+
+    if not _can_manage_tasks_on(current_user, checklist):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions")
+
+    if body.section_type in (SubchecklistType.PRE_SABHA, SubchecklistType.POST_SABHA):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "PRE_SABHA and POST_SABHA subchecklists are created automatically"
+        )
+
+    # Determine order
+    count_result = await db.execute(
+        select(Subchecklist).where(Subchecklist.checklist_id == checklist_id)
+    )
+    existing_count = len(list(count_result.scalars().all()))
+
+    sub = Subchecklist(
+        checklist_id=checklist_id,
+        title=body.title,
+        section_type=SubchecklistType.CUSTOM,
+        is_mandatory=False,
+        section_order=body.section_order if body.section_order is not None else existing_count,
+    )
+    db.add(sub)
+    await db.commit()
+    await db.refresh(sub, ["items"])
+    return sub
+
+
 @router.post("/{checklist_id}/assign", response_model=ChecklistAssignmentOut, status_code=status.HTTP_201_CREATED)
 async def assign_user(
     checklist_id: int,
@@ -258,21 +433,37 @@ async def assign_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ChecklistAssignment:
-    """Assign a user to a checklist. Coordinators and admins only."""
-    if not _can_manage(current_user) and not current_user.role.can_approve_requests:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to assign users")
-
-    cl_result = await db.execute(select(Checklist).where(Checklist.id == checklist_id))
+    """Assign a user to a checklist. Coordinators, admins, and group leads on this checklist."""
+    cl_result = await db.execute(
+        select(Checklist).where(Checklist.id == checklist_id)
+        .options(selectinload(Checklist.assignments))
+    )
     checklist = cl_result.scalar_one_or_none()
     if not checklist:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist not found")
 
-    # Verify target user exists
-    user_result = await db.execute(select(User).where(User.id == body.user_id, User.is_active == True))
-    if not user_result.scalar_one_or_none():
+    # Admins/coordinators can assign to any checklist.
+    # Group leads can assign only to checklists they are on AND that belong to their own group.
+    if not _can_manage(current_user):
+        if not (
+            current_user.role.can_approve_requests
+            and _is_assigned(checklist, current_user.id)
+            and current_user.group_name == checklist.group_name
+        ):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to assign users")
+
+    target_user = (await db.execute(select(User).where(User.id == body.user_id, User.is_active == True))).scalar_one_or_none()
+    if not target_user:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
 
-    # Check not already assigned
+    # Non-managers can only assign users within the same group as the checklist
+    if not _can_manage(current_user):
+        if target_user.group_name != checklist.group_name:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "You can only assign users from the same group as this checklist",
+            )
+
     existing = await db.execute(
         select(ChecklistAssignment).where(
             ChecklistAssignment.checklist_id == checklist_id,
@@ -289,11 +480,45 @@ async def assign_user(
     )
     db.add(assignment)
     await db.commit()
-    await db.refresh(assignment)
-
-    # Load user for response
     await db.refresh(assignment, ["user"])
     return assignment
+
+
+@router.delete("/{checklist_id}/assign/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unassign_user(
+    checklist_id: int,
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    cl_result = await db.execute(
+        select(Checklist).where(Checklist.id == checklist_id)
+        .options(selectinload(Checklist.assignments))
+    )
+    checklist = cl_result.scalar_one_or_none()
+    if not checklist:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist not found")
+
+    if not _can_manage(current_user):
+        if not (
+            current_user.role.can_approve_requests
+            and _is_assigned(checklist, current_user.id)
+            and current_user.group_name == checklist.group_name
+        ):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to unassign users")
+
+    result = await db.execute(
+        select(ChecklistAssignment).where(
+            ChecklistAssignment.checklist_id == checklist_id,
+            ChecklistAssignment.user_id == user_id,
+        )
+    )
+    assignment = result.scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assignment not found")
+
+    await db.delete(assignment)
+    await db.commit()
 
 
 @router.post("/backfill-active-transactions", status_code=status.HTTP_200_OK)
@@ -309,14 +534,11 @@ async def backfill_active_transactions(
     if not _can_manage(current_user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin or coordinator required")
 
-    from sqlalchemy import select as sa_select
     from app.models.transaction import Transaction, TransactionStatus
-    from app.models.checklist import ChecklistItem
     from app.services.checklist_service import add_return_task_for_transaction
 
-    # Find all active transactions whose borrower has a group_name
     txn_result = await db.execute(
-        sa_select(Transaction)
+        select(Transaction)
         .where(Transaction.status.in_([TransactionStatus.CHECKED_OUT, TransactionStatus.OVERDUE]))
         .options(selectinload(Transaction.user))
     )
@@ -329,9 +551,8 @@ async def backfill_active_transactions(
         if not borrower or not borrower.group_name:
             skipped += 1
             continue
-        # Check if a return task already exists for this transaction
         existing = await db.execute(
-            sa_select(ChecklistItem).where(
+            select(ChecklistItem).where(
                 ChecklistItem.linked_transaction_id == txn.id,
                 ChecklistItem.is_auto_generated == True,
             )
@@ -344,27 +565,3 @@ async def backfill_active_transactions(
 
     await db.commit()
     return {"created": created, "skipped": skipped}
-
-
-@router.delete("/{checklist_id}/assign/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def unassign_user(
-    checklist_id: int,
-    user_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> None:
-    if not _can_manage(current_user) and not current_user.role.can_approve_requests:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to unassign users")
-
-    result = await db.execute(
-        select(ChecklistAssignment).where(
-            ChecklistAssignment.checklist_id == checklist_id,
-            ChecklistAssignment.user_id == user_id,
-        )
-    )
-    assignment = result.scalar_one_or_none()
-    if not assignment:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assignment not found")
-
-    await db.delete(assignment)
-    await db.commit()

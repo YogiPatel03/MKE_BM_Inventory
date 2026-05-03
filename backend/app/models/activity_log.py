@@ -73,7 +73,7 @@ class ActivityLog(Base):
     target_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     # Quantity / cost context (signed: positive = increase, negative = decrease)
-    quantity_delta: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    quantity_delta: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
     cost_impact: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

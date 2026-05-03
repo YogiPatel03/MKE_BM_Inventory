@@ -6,6 +6,7 @@ not returned). UsageEvent is the audit trail; Transaction is NOT used.
 """
 
 import logging
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,9 +40,11 @@ async def mark_as_used(
     item_id: int,
     user_id: int,
     processed_by_user_id: int,
-    quantity_used: int,
+    quantity_used: "Decimal | int",
     notes: str | None,
 ) -> UsageEvent:
+    qty = Decimal(str(quantity_used)) if not isinstance(quantity_used, Decimal) else quantity_used
+
     result = await db.execute(
         select(Item).where(Item.id == item_id, Item.is_active == True).with_for_update()
     )
@@ -54,21 +57,21 @@ async def mark_as_used(
             f"Item '{item.name}' is not consumable. Use checkout/return instead."
         )
 
-    if item.quantity_available < quantity_used:
-        raise InsufficientStockError(item.name, quantity_used, item.quantity_available)
+    if item.quantity_available < qty:
+        raise InsufficientStockError(item.name, qty, item.quantity_available)
 
     qty_before = item.quantity_available
     threshold = _effective_threshold(item)
 
     # Consumables are permanently consumed
-    item.quantity_available -= quantity_used
-    item.quantity_total -= quantity_used
+    item.quantity_available -= qty
+    item.quantity_total -= qty
 
     event = UsageEvent(
         item_id=item_id,
         user_id=user_id,
         processed_by_user_id=processed_by_user_id,
-        quantity_used=quantity_used,
+        quantity_used=qty,
         notes=notes,
         is_reversal=False,
     )
@@ -78,7 +81,7 @@ async def mark_as_used(
 
     cost_impact = None
     if item.unit_price:
-        cost_impact = float(item.unit_price) * quantity_used
+        cost_impact = float(item.unit_price) * float(qty)
 
     await log_activity(
         db,
@@ -86,7 +89,7 @@ async def mark_as_used(
         actor_id=processed_by_user_id,
         target_item_id=item_id,
         target_cabinet_id=item.cabinet_id,
-        quantity_delta=-quantity_used,
+        quantity_delta=float(-qty),
         cost_impact=cost_impact,
         notes=notes,
         metadata={"quantity_before": qty_before, "quantity_after": item.quantity_available},
@@ -102,8 +105,8 @@ async def mark_as_used(
     qty_after = item.quantity_available
 
     log.info(
-        "UsageEvent: event=%d item=%d user=%d qty=%d",
-        event.id, item_id, user_id, quantity_used,
+        "UsageEvent: event=%d item=%d user=%d qty=%s",
+        event.id, item_id, user_id, qty,
     )
 
     # Fire alerts after flush so we have all data; actual sends happen async
@@ -176,7 +179,7 @@ async def reverse_usage(
 
     cost_impact = None
     if item.unit_price:
-        cost_impact = float(item.unit_price) * original.quantity_used
+        cost_impact = float(item.unit_price) * float(original.quantity_used)
 
     await log_activity(
         db,
@@ -184,7 +187,7 @@ async def reverse_usage(
         actor_id=reversed_by_user_id,
         target_item_id=original.item_id,
         target_cabinet_id=item.cabinet_id,
-        quantity_delta=+original.quantity_used,
+        quantity_delta=float(original.quantity_used),
         cost_impact=-cost_impact if cost_impact else None,
         notes=reversal.notes,
         metadata={

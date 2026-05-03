@@ -1,14 +1,14 @@
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user as get_current_active_user, get_db
-from app.core.permissions import require_process_any_transaction
+from app.core.permissions import is_group_lead, require_process_any_transaction
 from app.models.bin_transaction import BinTransaction
 from app.models.user import User
-from app.schemas.bin_transaction import BinTransactionCreate, BinTransactionOut, BinTransactionReturn
+from app.schemas.bin_transaction import BinCheckoutOut, BinTransactionCreate, BinTransactionOut, BinTransactionReturn
 from app.services.bin_transaction_service import checkout_bin, return_bin
 from app.services.checklist_service import (
     add_return_task_for_bin_transaction,
@@ -18,14 +18,15 @@ from app.services.checklist_service import (
 router = APIRouter(prefix="/bin-transactions", tags=["bin-transactions"])
 
 
-@router.post("", response_model=BinTransactionOut, status_code=201)
+@router.post("", response_model=BinCheckoutOut, status_code=201)
 async def checkout_bin_endpoint(
     body: BinTransactionCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    require_process_any_transaction(current_user)
-    bin_txn = await checkout_bin(
+    # Bin checkout is self-service: any authenticated user can check out for themselves.
+    # No extra permission check needed — get_current_active_user already ensures authentication.
+    bin_txn, excluded_item_ids = await checkout_bin(
         db,
         bin_id=body.bin_id,
         user_id=current_user.id,
@@ -39,7 +40,10 @@ async def checkout_bin_endpoint(
 
     await db.commit()
     await db.refresh(bin_txn)
-    return bin_txn
+    return BinCheckoutOut(
+        **{k: v for k, v in bin_txn.__dict__.items() if not k.startswith("_")},
+        excluded_item_ids=excluded_item_ids,
+    )
 
 
 @router.post("/{bin_transaction_id}/return", response_model=BinTransactionOut)
@@ -49,7 +53,26 @@ async def return_bin_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    require_process_any_transaction(current_user)
+    # Load the existing bin transaction to check ownership
+    existing = (await db.execute(
+        select(BinTransaction).where(BinTransaction.id == bin_transaction_id)
+    )).scalar_one_or_none()
+    if not existing:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bin transaction not found")
+
+    is_owner = existing.user_id == current_user.id
+    is_coordinator = current_user.role.can_process_any_transaction or current_user.role.can_manage_users
+
+    # GROUP_LEAD: allowed only if borrower is in their group
+    is_group_lead_for_borrower = False
+    if is_group_lead(current_user) and not is_coordinator:
+        borrower = (await db.execute(select(User).where(User.id == existing.user_id))).scalar_one_or_none()
+        if borrower and borrower.group_name == current_user.group_name:
+            is_group_lead_for_borrower = True
+
+    if not (is_owner or is_coordinator or is_group_lead_for_borrower):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only return bins you checked out")
+
     bin_txn = await return_bin(
         db,
         bin_transaction_id=bin_transaction_id,
@@ -70,8 +93,16 @@ async def list_bin_transactions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    require_process_any_transaction(current_user)
-    result = await db.execute(
-        select(BinTransaction).order_by(BinTransaction.checked_out_at.desc()).limit(200)
-    )
+    query = select(BinTransaction).order_by(BinTransaction.checked_out_at.desc()).limit(200)
+
+    if current_user.role.can_process_any_transaction or current_user.role.can_manage_users:
+        pass  # coordinators/admins see all
+    elif is_group_lead(current_user):
+        query = query.join(User, BinTransaction.user_id == User.id).where(
+            User.group_name == current_user.group_name
+        )
+    else:
+        query = query.where(BinTransaction.user_id == current_user.id)
+
+    result = await db.execute(query)
     return result.scalars().all()

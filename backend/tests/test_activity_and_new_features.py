@@ -14,11 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.security import hash_password
-from app.models.cabinet import Cabinet
-from app.models.role import Role
-from app.models.user import User
 from app.models.activity_log import ActivityLog, ActivityType
+from app.models.cabinet import Cabinet
 from app.models.item import Item
+from app.models.role import Role
+from app.models.room import Room
+from app.models.user import User
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -54,9 +55,12 @@ async def _login(client: AsyncClient, username: str, password: str) -> str:
     return r.json()["access_token"]
 
 
-async def _setup_cabinet_and_consumable(client, headers) -> tuple[dict, dict]:
+async def _setup_cabinet_and_consumable(client, db, headers) -> tuple[dict, dict]:
     """Returns (cabinet, consumable_item) as JSON dicts."""
-    cab = (await client.post("/api/cabinets", json={"name": "Test Cabinet X"}, headers=headers)).json()
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Test Cabinet X", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
         json={
@@ -79,7 +83,10 @@ async def test_item_create_logs_activity(client: AsyncClient, db: AsyncSession):
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    cab = (await client.post("/api/cabinets", json={"name": "Cab-Activity"}, headers=headers)).json()
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Cab-Activity", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
         json={"name": "Widget", "quantity_total": 5, "cabinet_id": cab["id"]},
@@ -103,7 +110,7 @@ async def test_usage_logs_activity(client: AsyncClient, db: AsyncSession):
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    _, item = await _setup_cabinet_and_consumable(client, headers)
+    _, item = await _setup_cabinet_and_consumable(client, db, headers)
 
     r = await client.post("/api/usage-events", json={"item_id": item["id"], "quantity_used": 3}, headers=headers)
     assert r.status_code == 201
@@ -122,7 +129,7 @@ async def test_item_edit_logs_activity(client: AsyncClient, db: AsyncSession):
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    _, item = await _setup_cabinet_and_consumable(client, headers)
+    _, item = await _setup_cabinet_and_consumable(client, db, headers)
 
     patch_r = await client.patch(f"/api/items/{item['id']}", json={"name": "Batteries v2"}, headers=headers)
     assert patch_r.status_code == 200
@@ -140,7 +147,10 @@ async def test_cabinet_edit_logs_activity(client: AsyncClient, db: AsyncSession)
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    cab = (await client.post("/api/cabinets", json={"name": "Cab-Edit-Test"}, headers=headers)).json()
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Cab-Edit-Test", "room_id": room.id}, headers=headers)).json()
     patch_r = await client.patch(f"/api/cabinets/{cab['id']}", json={"name": "Updated Cabinet"}, headers=headers)
     assert patch_r.status_code == 200
 
@@ -158,7 +168,7 @@ async def test_usage_reversal_restores_quantity(client: AsyncClient, db: AsyncSe
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    _, item = await _setup_cabinet_and_consumable(client, headers)
+    _, item = await _setup_cabinet_and_consumable(client, db, headers)
     item_id = item["id"]
 
     # Use 5 units
@@ -194,7 +204,7 @@ async def test_usage_reversal_blocks_double_reversal(client: AsyncClient, db: As
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    _, item = await _setup_cabinet_and_consumable(client, headers)
+    _, item = await _setup_cabinet_and_consumable(client, db, headers)
 
     r = await client.post("/api/usage-events", json={"item_id": item["id"], "quantity_used": 2}, headers=headers)
     event_id = r.json()["id"]
@@ -213,7 +223,7 @@ async def test_usage_expense_report_nets_reversals(client: AsyncClient, db: Asyn
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    _, item = await _setup_cabinet_and_consumable(client, headers)
+    _, item = await _setup_cabinet_and_consumable(client, db, headers)
 
     # Log a purchase first so unit_price is known
     await client.post("/api/purchases", json={
@@ -250,7 +260,10 @@ async def test_low_stock_threshold_default_ten_percent(client: AsyncClient, db: 
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    cab = (await client.post("/api/cabinets", json={"name": "Cab-Thresh"}, headers=headers)).json()
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Cab-Thresh", "room_id": room.id}, headers=headers)).json()
     # 100 total, no explicit threshold → dynamic threshold = max(1, 100 // 10) = 10
     item = (await client.post(
         "/api/items",
@@ -284,7 +297,10 @@ async def test_low_stock_threshold_explicit(client: AsyncClient, db: AsyncSessio
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    cab = (await client.post("/api/cabinets", json={"name": "Cab-Explicit"}, headers=headers)).json()
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Cab-Explicit", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
         json={"name": "Bolts", "quantity_total": 100, "cabinet_id": cab["id"], "low_stock_threshold": 25},
@@ -308,7 +324,10 @@ async def test_out_of_stock_item_appears_in_report(client: AsyncClient, db: Asyn
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    cab = (await client.post("/api/cabinets", json={"name": "Cab-OOS"}, headers=headers)).json()
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Cab-OOS", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
         json={"name": "Tape", "quantity_total": 5, "cabinet_id": cab["id"], "is_consumable": True},
@@ -336,7 +355,10 @@ async def test_restock_me_auto_move_on_zero(client: AsyncClient, db: AsyncSessio
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    cab = (await client.post("/api/cabinets", json={"name": "Main Cabinet"}, headers=headers)).json()
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Main Cabinet", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
         json={"name": "Gloves", "quantity_total": 2, "cabinet_id": cab["id"], "is_consumable": True},
@@ -376,7 +398,10 @@ async def test_restock_me_auto_restore_on_restock(client: AsyncClient, db: Async
     token = await _login(client, "admin2", "adminpass2")
     headers = {"Authorization": f"Bearer {token}"}
 
-    cab = (await client.post("/api/cabinets", json={"name": "Original Cabinet"}, headers=headers)).json()
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Original Cabinet", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
         json={"name": "Clips", "quantity_total": 3, "cabinet_id": cab["id"], "is_consumable": True},

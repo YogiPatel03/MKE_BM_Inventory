@@ -59,7 +59,7 @@ async def create_item(
         actor_id=current_user.id,
         target_item_id=item.id,
         target_cabinet_id=item.cabinet_id,
-        quantity_delta=item.quantity_total,
+        quantity_delta=float(item.quantity_total),
         notes=f"Item created: {item.name}",
         metadata={"name": item.name, "quantity_total": item.quantity_total, "is_consumable": item.is_consumable},
         source_type="item",

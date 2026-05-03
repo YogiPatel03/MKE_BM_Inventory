@@ -7,6 +7,7 @@ notification target; user DMs are used for overdue reminders when a
 telegram_chat_id is linked.
 """
 
+import html
 import logging
 from typing import TYPE_CHECKING, Optional
 
@@ -52,11 +53,11 @@ async def notify_checkout(transaction: Transaction) -> None:
     if not settings.telegram_coordinator_chat_id:
         return
 
-    username = transaction.user.username
+    username = html.escape(transaction.user.username)
     tg_handle = transaction.user.telegram_handle
-    user_display = f"@{tg_handle}" if tg_handle else username
+    user_display = html.escape(f"@{tg_handle}" if tg_handle else transaction.user.username)
 
-    item_name = transaction.item.name
+    item_name = html.escape(transaction.item.name)
     due_str = (
         transaction.due_at.strftime("%b %d, %Y") if transaction.due_at else "no due date"
     )
@@ -79,10 +80,9 @@ async def notify_return_and_request_photo(transaction: Transaction) -> Optional[
     if not settings.telegram_coordinator_chat_id:
         return None
 
-    username = transaction.user.username
     tg_handle = transaction.user.telegram_handle
-    user_display = f"@{tg_handle}" if tg_handle else username
-    item_name = transaction.item.name
+    user_display = html.escape(f"@{tg_handle}" if tg_handle else transaction.user.username)
+    item_name = html.escape(transaction.item.name)
 
     text = (
         f"✅ <b>Return logged</b> #{transaction.id}\n"
@@ -97,10 +97,9 @@ async def notify_return_and_request_photo(transaction: Transaction) -> Optional[
 
 async def notify_overdue(transaction: Transaction) -> None:
     """DM the user whose checkout is overdue, and notify the coordinator channel."""
-    username = transaction.user.username
     tg_handle = transaction.user.telegram_handle
-    user_display = f"@{tg_handle}" if tg_handle else username
-    item_name = transaction.item.name
+    user_display = html.escape(f"@{tg_handle}" if tg_handle else transaction.user.username)
+    item_name = html.escape(transaction.item.name)
     due_str = (
         transaction.due_at.strftime("%b %d, %Y") if transaction.due_at else "unknown"
     )
@@ -129,7 +128,7 @@ async def notify_overdue(transaction: Transaction) -> None:
 async def notify_account_linked(chat_id: str, full_name: str) -> None:
     text = (
         f"✅ Account linked successfully!\n"
-        f"Welcome, <b>{full_name}</b>. You'll now receive inventory notifications here."
+        f"Welcome, <b>{html.escape(full_name)}</b>. You'll now receive inventory notifications here."
     )
     await _send(chat_id, text)
 
@@ -139,11 +138,11 @@ async def notify_new_request(request_id: int, requester_name: str, target_name: 
     if not settings.telegram_coordinator_chat_id:
         return None
 
-    reason_text = f"\nReason: {reason}" if reason else ""
+    reason_text = f"\nReason: {html.escape(reason)}" if reason else ""
     text = (
         f"📋 <b>New Request</b> #{request_id}\n"
-        f"From: {requester_name}\n"
-        f"Item: <b>{target_name}</b>{reason_text}\n\n"
+        f"From: {html.escape(requester_name)}\n"
+        f"Item: <b>{html.escape(target_name)}</b>{reason_text}\n\n"
         f"/approve {request_id}  |  /deny {request_id}"
     )
     message_id = await _send(settings.telegram_coordinator_chat_id, text)
@@ -156,9 +155,9 @@ async def notify_low_stock(item_name: str, quantity_available: int, threshold: i
         return
     text = (
         f"⚠️ <b>Low stock alert</b>\n"
-        f"Item: <b>{item_name}</b>\n"
+        f"Item: <b>{html.escape(item_name)}</b>\n"
         f"Remaining: {quantity_available} (threshold: {threshold})\n"
-        f"Location: {location}\n\n"
+        f"Location: {html.escape(location)}\n\n"
         f"Consider restocking soon."
     )
     await _send(settings.telegram_coordinator_chat_id, text)
@@ -168,7 +167,7 @@ async def notify_request_approved(requester_chat_id: str, item_name: str, reques
     """DM the requester when their checkout request is approved."""
     text = (
         f"✅ <b>Request approved!</b>\n"
-        f"Your request #{request_id} for <b>{item_name}</b> has been approved and fulfilled.\n"
+        f"Your request #{request_id} for <b>{html.escape(item_name)}</b> has been approved and fulfilled.\n"
         f"Please collect the item promptly."
     )
     await _send(requester_chat_id, text)
@@ -176,10 +175,10 @@ async def notify_request_approved(requester_chat_id: str, item_name: str, reques
 
 async def notify_request_denied(requester_chat_id: str, item_name: str, request_id: int, reason: str | None) -> None:
     """DM the requester when their checkout request is denied."""
-    reason_text = f"\nReason: {reason}" if reason else ""
+    reason_text = f"\nReason: {html.escape(reason)}" if reason else ""
     text = (
         f"❌ <b>Request denied</b>\n"
-        f"Your request #{request_id} for <b>{item_name}</b> was denied.{reason_text}"
+        f"Your request #{request_id} for <b>{html.escape(item_name)}</b> was denied.{reason_text}"
     )
     await _send(requester_chat_id, text)
 
@@ -192,10 +191,13 @@ async def notify_checklist_return_proof(task: "ChecklistItem", completer: "User"
     if not settings.telegram_coordinator_chat_id:
         return
 
-    user_display = f"@{completer.telegram_handle}" if completer.telegram_handle else completer.full_name
+    user_display = html.escape(
+        f"@{completer.telegram_handle}" if completer.telegram_handle else completer.full_name
+    )
+    task_title = html.escape(task.title)
     text = (
         f"📋 <b>Checklist return task completed</b>\n"
-        f"Task: <b>{task.title}</b>\n"
+        f"Task: <b>{task_title}</b>\n"
         f"Completed by: {user_display}\n\n"
         f"📷 {user_display}, please reply to this message with a photo confirming the return."
     )
@@ -208,8 +210,8 @@ async def notify_out_of_stock(item_name: str, location: str) -> None:
         return
     text = (
         f"🔴 <b>Out of stock</b>\n"
-        f"Item: <b>{item_name}</b>\n"
-        f"Location: {location}\n\n"
+        f"Item: <b>{html.escape(item_name)}</b>\n"
+        f"Location: {html.escape(location)}\n\n"
         f"Item has been moved to Restock Me. Restock to restore."
     )
     await _send(settings.telegram_coordinator_chat_id, text)
@@ -228,11 +230,12 @@ async def notify_purchase_and_request_receipt(
     Also DMs the purchaser directly if their Telegram is linked.
     Returns the coordinator channel message_id (used to match photo replies).
     """
-    user_display = f"@{purchaser_tg_handle}" if purchaser_tg_handle else purchaser_name
+    user_display = html.escape(f"@{purchaser_tg_handle}" if purchaser_tg_handle else purchaser_name)
+    escaped_item = html.escape(item_name)
 
     group_text = (
         f"🛒 <b>Purchase logged</b> #{purchase_id}\n"
-        f"Item: <b>{item_name}</b> × {quantity}\n"
+        f"Item: <b>{escaped_item}</b> × {quantity}\n"
         f"By: {user_display}\n\n"
         f"📄 {user_display}, please reply to this message with a receipt photo or scan."
     )
@@ -244,7 +247,7 @@ async def notify_purchase_and_request_receipt(
     # DM the purchaser so they don't miss the receipt request
     if purchaser_chat_id:
         dm_text = (
-            f"🛒 You just logged a purchase of <b>{item_name}</b> × {quantity} (#{purchase_id}).\n\n"
+            f"🛒 You just logged a purchase of <b>{escaped_item}</b> × {quantity} (#{purchase_id}).\n\n"
             f"📄 Please reply to the coordinator channel message with a receipt photo or scan."
         )
         await _send(purchaser_chat_id, dm_text)

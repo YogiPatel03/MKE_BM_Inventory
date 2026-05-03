@@ -8,6 +8,7 @@ and delegates Telegram notifications to telegram_service.
 
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import select, update
@@ -16,6 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import InsufficientStockError, NotFoundError, TransactionConflictError
 from app.models.activity_log import ActivityType
+from app.models.bin_transaction import BinTransaction, BinTransactionStatus
 from app.models.item import Item
 from app.models.transaction import Transaction, TransactionStatus
 from app.models.user import User
@@ -30,7 +32,7 @@ async def checkout_item(
     item_id: int,
     user_id: int,
     processed_by_user_id: int,
-    quantity: int,
+    quantity: float,
     due_at: Optional[datetime],
     notes: Optional[str],
 ) -> Transaction:
@@ -53,27 +55,38 @@ async def checkout_item(
     if not user_result.scalar_one_or_none():
         raise NotFoundError("User", user_id)
 
-    # Items inside a bin must be checked out via BinTransaction, not individually
+    # If item is inside a bin, allow individual checkout ONLY if the bin is not
+    # currently checked out as a whole. If the bin itself is checked out, the
+    # item is already part of that bin transaction.
     if item.bin_id is not None:
-        raise TransactionConflictError(
-            f"Item '{item.name}' is inside a bin. Check out the whole bin instead."
+        active_bin_txn = await db.execute(
+            select(BinTransaction).where(
+                BinTransaction.bin_id == item.bin_id,
+                BinTransaction.status == BinTransactionStatus.CHECKED_OUT,
+            )
         )
+        if active_bin_txn.scalar_one_or_none():
+            raise TransactionConflictError(
+                f"Item '{item.name}' is inside a bin that is currently checked out as a whole. "
+                "Return the bin first, or wait for the bin to be returned."
+            )
 
     if item.is_consumable:
         raise TransactionConflictError(
             f"Item '{item.name}' is consumable. Use mark-as-used instead of checkout."
         )
 
-    if item.quantity_available < quantity:
-        raise InsufficientStockError(item.name, quantity, item.quantity_available)
+    qty = Decimal(str(quantity)) if not isinstance(quantity, Decimal) else quantity
+    if item.quantity_available < qty:
+        raise InsufficientStockError(item.name, qty, item.quantity_available)
 
-    item.quantity_available -= quantity
+    item.quantity_available -= qty
 
     transaction = Transaction(
         item_id=item_id,
         user_id=user_id,
         processed_by_user_id=processed_by_user_id,
-        quantity=quantity,
+        quantity=qty,
         status=TransactionStatus.CHECKED_OUT,
         due_at=due_at,
         notes=notes,
@@ -88,7 +101,7 @@ async def checkout_item(
         actor_id=processed_by_user_id,
         target_item_id=item_id,
         target_cabinet_id=item.cabinet_id,
-        quantity_delta=-quantity,
+        quantity_delta=float(-qty),
         notes=notes,
         metadata={"status": TransactionStatus.CHECKED_OUT, "due_at": due_at.isoformat() if due_at else None},
         source_type="transaction",
@@ -155,14 +168,14 @@ async def return_item(
         actor_id=processed_by_user_id,
         target_item_id=transaction.item_id,
         target_cabinet_id=item.cabinet_id,
-        quantity_delta=+transaction.quantity,
+        quantity_delta=float(transaction.quantity),
         notes=notes,
         source_type="transaction",
         source_id=transaction.id,
     )
 
     log.info(
-        "Return: transaction=%d item=%d user=%d qty=%d",
+        "Return: transaction=%d item=%d user=%d qty=%s",
         transaction.id,
         transaction.item_id,
         transaction.user_id,

@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,8 @@ async def create_usage_event(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    if not (current_user.role.can_manage_inventory or current_user.role.can_manage_users):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to record usage")
     event = await mark_as_used(
         db,
         item_id=body.item_id,

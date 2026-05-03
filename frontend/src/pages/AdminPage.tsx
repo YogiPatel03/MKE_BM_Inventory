@@ -28,14 +28,15 @@ export function AdminPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
 
-  if (!user?.role.canManageUsers) {
-    return <Navigate to="/dashboard" replace />;
-  }
-
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["users"],
     queryFn: listUsers,
+    enabled: !!user?.role.canManageUsers,
   });
+
+  if (!user?.role.canManageUsers) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   return (
     <div className="space-y-6">

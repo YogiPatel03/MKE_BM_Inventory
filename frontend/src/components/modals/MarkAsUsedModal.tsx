@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Flame, X } from "lucide-react";
 import { markAsUsed } from "@/api/usage";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 import type { Item } from "@/types";
 
 interface Props {
@@ -11,14 +12,15 @@ interface Props {
 
 export function MarkAsUsedModal({ item, onClose }: Props) {
   const qc = useQueryClient();
-  const [qty, setQty] = useState(1);
+  const [qty, setQty] = useState(1.0);
   const [notes, setNotes] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  useEscapeKey(onClose);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (qty < 1 || qty > item.quantityAvailable) return;
+    if (qty <= 0 || qty > item.quantityAvailable) return;
     setIsLoading(true);
     setError("");
     try {
@@ -35,14 +37,26 @@ export function MarkAsUsedModal({ item, onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-      <div className="card w-full max-w-sm p-6 relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-700">
-          <X className="h-5 w-5" />
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mark-used-title"
+        className="card w-full max-w-sm p-6 relative"
+      >
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-4 right-4 p-1.5 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+        >
+          <X className="h-4 w-4" />
         </button>
         <div className="flex items-center gap-2 mb-4">
-          <Flame className="h-5 w-5 text-amber-500" />
-          <h2 className="text-lg font-semibold text-slate-900">Mark as Used</h2>
+          <Flame className="h-5 w-5 text-amber-500" aria-hidden="true" />
+          <h2 id="mark-used-title" className="text-lg font-semibold text-slate-900">Mark as Used</h2>
         </div>
         <p className="text-sm text-slate-500 mb-4">
           <strong className="text-slate-700">{item.name}</strong> — {item.quantityAvailable} available.
@@ -50,21 +64,25 @@ export function MarkAsUsedModal({ item, onClose }: Props) {
         </p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="label">Quantity used *</label>
+            <label htmlFor="mark-used-qty" className="label">Quantity used *</label>
             <input
+              id="mark-used-qty"
               type="number"
-              min={1}
+              min={0.01}
               max={item.quantityAvailable}
+              step={0.01}
               className="input"
               value={qty}
-              onChange={(e) => setQty(Number(e.target.value))}
+              onChange={(e) => setQty(parseFloat(e.target.value) || 0)}
               required
+              autoFocus
             />
             <p className="text-xs text-slate-400 mt-1">Max: {item.quantityAvailable}</p>
           </div>
           <div>
-            <label className="label">Notes (optional)</label>
+            <label htmlFor="mark-used-notes" className="label">Notes (optional)</label>
             <input
+              id="mark-used-notes"
               className="input"
               placeholder="e.g. Used for event setup"
               value={notes}

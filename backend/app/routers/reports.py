@@ -34,11 +34,11 @@ from app.schemas.report import (
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 
-def _effective_threshold(item: Item) -> int:
+def _effective_threshold(item: Item) -> float:
     """Compute low-stock threshold: explicit if set, else 10% of quantity_total (min 1)."""
     if item.low_stock_threshold is not None:
-        return item.low_stock_threshold
-    return max(1, item.quantity_total // 10)
+        return float(item.low_stock_threshold)
+    return max(1.0, float(item.quantity_total) / 10)
 
 
 @router.get("/inventory-status", response_model=InventoryStatusReport)
@@ -78,8 +78,8 @@ async def inventory_status(
                     item_name=item.name,
                     cabinet_id=item.cabinet_id,
                     bin_id=item.bin_id,
-                    quantity_available=item.quantity_available,
-                    quantity_total=item.quantity_total,
+                    quantity_available=float(item.quantity_available),
+                    quantity_total=float(item.quantity_total),
                     low_stock_threshold=threshold,
                 ))
 
@@ -142,7 +142,7 @@ async def expense_report(
                 total_purchased=0,
                 total_purchase_cost=0.0,
             )
-        by_purchase[item.id].total_purchased += purchase.quantity_purchased
+        by_purchase[item.id].total_purchased += float(purchase.quantity_purchased)
         by_purchase[item.id].total_purchase_cost = (
             (by_purchase[item.id].total_purchase_cost or 0.0) + cost
         )
@@ -190,7 +190,7 @@ async def expense_report(
         )
         historical_price = price_result.scalar_one_or_none()
         unit_cost = float(historical_price or item.unit_price or 0)
-        event_cost = unit_cost * usage_event.quantity_used
+        event_cost = unit_cost * float(usage_event.quantity_used)
         total_usage_cost += event_cost
 
         if item.id not in by_usage:
@@ -201,7 +201,7 @@ async def expense_report(
                 total_used=0,
                 total_cost=0.0,
             )
-        by_usage[item.id].total_used += usage_event.quantity_used
+        by_usage[item.id].total_used += float(usage_event.quantity_used)
         by_usage[item.id].total_cost = (by_usage[item.id].total_cost or 0.0) + event_cost
 
     return ExpenseReport(
@@ -247,7 +247,7 @@ async def held_value_report(
 
     for item, cabinet, room in rows:
         unit_price = float(item.unit_price) if item.unit_price is not None else 0.0
-        held_value = unit_price * item.quantity_total
+        held_value = unit_price * float(item.quantity_total)
         total_held_value += held_value
 
         items_out.append(HeldValueItem(
@@ -258,8 +258,8 @@ async def held_value_report(
             room_id=room.id,
             room_name=room.name,
             bin_id=item.bin_id,
-            quantity_total=item.quantity_total,
-            quantity_available=item.quantity_available,
+            quantity_total=float(item.quantity_total),
+            quantity_available=float(item.quantity_available),
             unit_price=unit_price or None,
             held_value=held_value,
         ))

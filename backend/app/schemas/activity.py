@@ -46,7 +46,7 @@ class ActivityLogOut(BaseModel):
     target_user_id: Optional[int]
     target_user: Optional[ActorOut]
 
-    quantity_delta: Optional[int]
+    quantity_delta: Optional[float]
     cost_impact: Optional[float]
     notes: Optional[str]
     metadata_: Optional[dict[str, Any]]

@@ -12,6 +12,15 @@ from app.database import Base
 from app.dependencies import get_db
 from app.main import app
 
+
+async def create_test_room(db: AsyncSession, name: str = "Test Room"):
+    """Create a Room in the test DB and return it. Used by tests that create cabinets."""
+    from app.models.room import Room
+    room = Room(name=name)
+    db.add(room)
+    await db.flush()
+    return room
+
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)

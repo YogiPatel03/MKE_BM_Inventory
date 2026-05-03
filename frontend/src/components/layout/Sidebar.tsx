@@ -32,11 +32,11 @@ export function Sidebar() {
 
   const navItems = [
     { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { to: "/inventory", label: "Inventory", icon: PackageSearch },
     { to: "/rooms", label: "Rooms", icon: DoorOpen },
-    { to: "/inventory-list", label: "All Inventory", icon: PackageSearch },
+    { to: "/checklist", label: "Checklist", icon: ClipboardCheck },
     { to: "/transactions", label: "Transactions", icon: ClipboardList },
     { to: "/requests", label: "Requests", icon: Inbox },
-    { to: "/checklist", label: "Checklist", icon: ClipboardCheck },
     { to: "/settings", label: "Settings", icon: Settings },
   ];
 
@@ -65,10 +65,11 @@ export function Sidebar() {
             to={to}
             className={({ isActive }) =>
               clsx(
-                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                "flex items-center gap-3 rounded-lg pr-3 py-2.5 text-sm font-medium transition-colors",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-inset",
                 isActive
-                  ? "bg-brand-50 text-brand-700"
-                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                  ? "bg-brand-50 text-brand-700 border-l-2 border-brand-600 pl-2.5"
+                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 pl-3"
               )
             }
           >
@@ -90,10 +91,11 @@ export function Sidebar() {
                 to={to}
                 className={({ isActive }) =>
                   clsx(
-                    "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                    "flex items-center gap-3 rounded-lg pr-3 py-2.5 text-sm font-medium transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-inset",
                     isActive
-                      ? "bg-brand-50 text-brand-700"
-                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                      ? "bg-brand-50 text-brand-700 border-l-2 border-brand-600 pl-2.5"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 pl-3"
                   )
                 }
               >

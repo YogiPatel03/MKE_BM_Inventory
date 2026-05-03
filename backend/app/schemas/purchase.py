@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -6,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class PurchaseRecordCreate(BaseModel):
     item_id: int
-    quantity_purchased: int = Field(..., ge=1)
+    quantity_purchased: Decimal = Field(..., gt=Decimal("0"), decimal_places=2)
     unit_price: Optional[float] = None
     total_price: Optional[float] = None
     vendor: Optional[str] = None
@@ -21,7 +22,7 @@ class PurchaseRecordOut(BaseModel):
     item_id: int
     purchased_by_user_id: int
     receipt_id: Optional[int] = None
-    quantity_purchased: int
+    quantity_purchased: float
     unit_price: Optional[float] = None
     total_price: Optional[float] = None
     vendor: Optional[str] = None
