@@ -37,7 +37,7 @@ class InventoryRequestOut(BaseModel):
     approver_id: Optional[int] = None
     item_id: Optional[int] = None
     bin_id: Optional[int] = None
-    quantity_requested: Decimal
+    quantity_requested: float
     status: str
     reason: Optional[str] = None
     denial_reason: Optional[str] = None

@@ -47,6 +47,21 @@ def is_group_lead(user: User) -> bool:
     return user.role.can_approve_requests and user.group_name is not None
 
 
+def check_request_scope(current_user: User, requester_group: str | None) -> bool:
+    """
+    Returns True if current_user may approve/deny a request from a user in requester_group.
+    Mirrors the scoping logic used by list_requests:
+      - can_manage_users → global access
+      - GROUP_LEAD (can_approve_requests + group_name set) → own group only
+      - can_approve_requests without group_name (COORDINATOR) → global access
+    """
+    if current_user.role.can_manage_users:
+        return True
+    if is_group_lead(current_user):
+        return requester_group is not None and requester_group == current_user.group_name
+    return current_user.role.can_approve_requests
+
+
 def can_process_transaction_for(
     actor: User, target_user_id: int, target_group: str | None = None
 ) -> bool:

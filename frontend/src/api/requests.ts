@@ -20,7 +20,11 @@ export async function submitRequest(data: {
 
 export async function listRequests(status?: string): Promise<InventoryRequest[]> {
   const { data } = await apiClient.get("/requests", { params: status ? { status } : undefined });
-  return data;
+  // Coerce quantity_requested to number — Pydantic v2 may serialize Decimal as a string.
+  return (data as InventoryRequest[]).map((r) => ({
+    ...r,
+    quantityRequested: Number(r.quantityRequested),
+  }));
 }
 
 export async function approveRequest(

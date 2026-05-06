@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useAuthStore } from "@/store/auth";
 import { AppShell } from "@/components/layout/AppShell";
 import { LoginPage } from "@/pages/LoginPage";
@@ -48,9 +49,11 @@ export default function App() {
         <Route
           path="/"
           element={
-            <RequireAuth>
-              <AppShell />
-            </RequireAuth>
+            <ErrorBoundary>
+              <RequireAuth>
+                <AppShell />
+              </RequireAuth>
+            </ErrorBoundary>
           }
         >
           <Route index element={<Navigate to="/dashboard" replace />} />

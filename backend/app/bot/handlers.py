@@ -323,6 +323,7 @@ async def cmd_item_status(chat_id: str, item_query: str, db: AsyncSession) -> No
 
 async def cmd_requests(chat_id: str, db: AsyncSession) -> None:
     from app.models.inventory_request import InventoryRequest, RequestStatus
+    from app.core.permissions import is_group_lead
 
     user_result = await db.execute(
         select(User)
@@ -338,7 +339,7 @@ async def cmd_requests(chat_id: str, db: AsyncSession) -> None:
         await _send(chat_id, "❌ This command requires coordinator access.")
         return
 
-    result = await db.execute(
+    query = (
         select(InventoryRequest)
         .where(InventoryRequest.status == RequestStatus.PENDING)
         .options(
@@ -349,6 +350,14 @@ async def cmd_requests(chat_id: str, db: AsyncSession) -> None:
         .order_by(InventoryRequest.created_at)
         .limit(20)
     )
+
+    # Group leads see only their own group's requests — mirrors web list_requests.
+    if is_group_lead(user):
+        query = query.join(User, InventoryRequest.requester_id == User.id).where(
+            User.group_name == user.group_name
+        )
+
+    result = await db.execute(query)
     requests = result.scalars().all()
 
     if not requests:
@@ -370,6 +379,7 @@ async def cmd_requests(chat_id: str, db: AsyncSession) -> None:
 async def cmd_approve(chat_id: str, request_id_str: str, db: AsyncSession) -> None:
     from app.models.inventory_request import InventoryRequest, RequestStatus
     from app.services.request_service import approve_request
+    from app.core.permissions import check_request_scope
 
     user_result = await db.execute(
         select(User)
@@ -391,14 +401,33 @@ async def cmd_approve(chat_id: str, request_id_str: str, db: AsyncSession) -> No
         await _send(chat_id, "❌ Invalid request ID.")
         return
 
+    # Group scope check — same rule as the web approve endpoint.
+    scope_row = (await db.execute(
+        select(User.group_name)
+        .select_from(InventoryRequest)
+        .join(User, User.id == InventoryRequest.requester_id)
+        .where(InventoryRequest.id == request_id)
+    )).first()
+    if scope_row is None:
+        await _send(chat_id, f"❌ Request #{request_id} not found.")
+        return
+    if not check_request_scope(user, scope_row[0]):
+        await _send(chat_id, "❌ Permission denied: this request belongs to a different group.")
+        return
+
+    # Mutation — isolated from post-commit notifications.
     try:
         req = await approve_request(db, request_id=request_id, approver_id=user.id, due_at=None)
         await db.commit()
+    except Exception as e:
+        await _send(chat_id, f"❌ Error: {e}")
+        return
 
-        target_name = f"Bin #{req.bin_id}" if req.bin_id else f"Item #{req.item_id}"
-        await _send(chat_id, f"✅ Request #{req.id} approved ({target_name}).")
+    # Commit succeeded — report and notify (non-fatal).
+    target_name = f"Bin #{req.bin_id}" if req.bin_id else f"Item #{req.item_id}"
+    await _send(chat_id, f"✅ Request #{req.id} approved ({target_name}).")
 
-        # Notify requester if linked
+    try:
         requester_result = await db.execute(select(User).where(User.id == req.requester_id))
         requester = requester_result.scalar_one_or_none()
         if requester and requester.telegram_chat_id:
@@ -407,12 +436,14 @@ async def cmd_approve(chat_id: str, request_id_str: str, db: AsyncSession) -> No
                 requester.telegram_chat_id,
                 f"✅ Your request #{req.id} for <b>{target_name}</b> has been approved!",
             )
-    except Exception as e:
-        await _send(chat_id, f"❌ Error: {e}")
+    except Exception:
+        log.warning("Failed to notify requester for request %d", req.id)
 
 
 async def cmd_deny(chat_id: str, request_id_str: str, reason: str | None, db: AsyncSession) -> None:
     from app.services.request_service import deny_request
+    from app.models.inventory_request import InventoryRequest
+    from app.core.permissions import check_request_scope
 
     user_result = await db.execute(
         select(User)
@@ -434,13 +465,34 @@ async def cmd_deny(chat_id: str, request_id_str: str, reason: str | None, db: As
         await _send(chat_id, "❌ Invalid request ID.")
         return
 
+    # Group scope check — same rule as the web deny endpoint.
+    scope_row = (await db.execute(
+        select(User.group_name)
+        .select_from(InventoryRequest)
+        .join(User, User.id == InventoryRequest.requester_id)
+        .where(InventoryRequest.id == request_id)
+    )).first()
+    if scope_row is None:
+        await _send(chat_id, f"❌ Request #{request_id} not found.")
+        return
+    if not check_request_scope(user, scope_row[0]):
+        await _send(chat_id, "❌ Permission denied: this request belongs to a different group.")
+        return
+
+    # Mutation — isolated from post-commit notifications.
     try:
         req = await deny_request(
             db, request_id=request_id, approver_id=user.id, denial_reason=reason
         )
         await db.commit()
-        await _send(chat_id, f"❌ Request #{req.id} denied.")
+    except Exception as e:
+        await _send(chat_id, f"❌ Error: {e}")
+        return
 
+    # Commit succeeded — report and notify (non-fatal).
+    await _send(chat_id, f"❌ Request #{req.id} denied.")
+
+    try:
         requester_result = await db.execute(select(User).where(User.id == req.requester_id))
         requester = requester_result.scalar_one_or_none()
         if requester and requester.telegram_chat_id:
@@ -450,5 +502,5 @@ async def cmd_deny(chat_id: str, request_id_str: str, reason: str | None, db: As
                 requester.telegram_chat_id,
                 f"❌ Your request #{req.id} was denied.{reason_text}",
             )
-    except Exception as e:
-        await _send(chat_id, f"❌ Error: {e}")
+    except Exception:
+        log.warning("Failed to notify requester for request %d", req.id)

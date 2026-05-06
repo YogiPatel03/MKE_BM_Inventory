@@ -1,11 +1,14 @@
+import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user as get_current_active_user, get_db
-from app.core.permissions import is_group_lead, require_approve_requests
+from app.core.permissions import check_request_scope, is_group_lead, require_approve_requests
+
+log = logging.getLogger(__name__)
 from app.models.inventory_request import InventoryRequest, RequestStatus
 from app.models.user import User
 from app.schemas.inventory_request import (
@@ -106,6 +109,23 @@ async def approve(
     current_user: User = Depends(get_current_active_user),
 ):
     require_approve_requests(current_user)
+
+    # Scope check: group leads may only approve requests from their own group.
+    # Mirrors the same visibility rule used by list_requests.
+    scope_row = (await db.execute(
+        select(User.group_name)
+        .select_from(InventoryRequest)
+        .join(User, User.id == InventoryRequest.requester_id)
+        .where(InventoryRequest.id == request_id)
+    )).first()
+    if scope_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
+    if not check_request_scope(current_user, scope_row[0]):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to approve requests from this group.",
+        )
+
     req = await approve_request(
         db,
         request_id=request_id,
@@ -115,25 +135,27 @@ async def approve(
     await db.commit()
     await db.refresh(req)
 
-    # Notify requester via Telegram DM
-    from sqlalchemy import select
-    from app.models.user import User as UserModel
-    from app.models.item import Item
-    from app.models.bin import Bin
-    requester = (await db.execute(
-        select(UserModel).where(UserModel.id == req.requester_id)
-    )).scalar_one_or_none()
-    if requester and requester.telegram_chat_id:
-        target_name = "unknown item"
-        if req.item_id:
-            item = (await db.execute(select(Item).where(Item.id == req.item_id))).scalar_one_or_none()
-            if item:
-                target_name = item.name
-        elif req.bin_id:
-            bin_obj = (await db.execute(select(Bin).where(Bin.id == req.bin_id))).scalar_one_or_none()
-            if bin_obj:
-                target_name = f"Bin: {bin_obj.label}"
-        await notify_request_approved(requester.telegram_chat_id, target_name, req.id)
+    # Notify requester via Telegram DM — non-fatal: a notification failure must
+    # never mask or roll back a successful approval that is already committed.
+    try:
+        from app.models.item import Item
+        from app.models.bin import Bin
+        requester = (await db.execute(
+            select(User).where(User.id == req.requester_id)
+        )).scalar_one_or_none()
+        if requester and requester.telegram_chat_id:
+            target_name = "unknown item"
+            if req.item_id:
+                item = (await db.execute(select(Item).where(Item.id == req.item_id))).scalar_one_or_none()
+                if item:
+                    target_name = item.name
+            elif req.bin_id:
+                bin_obj = (await db.execute(select(Bin).where(Bin.id == req.bin_id))).scalar_one_or_none()
+                if bin_obj:
+                    target_name = f"Bin: {bin_obj.label}"
+            await notify_request_approved(requester.telegram_chat_id, target_name, req.id)
+    except Exception:
+        log.warning("Failed to send approval notification for request %d", req.id)
 
     return req
 
@@ -146,6 +168,22 @@ async def deny(
     current_user: User = Depends(get_current_active_user),
 ):
     require_approve_requests(current_user)
+
+    # Scope check: mirrors the same rule as approve.
+    scope_row = (await db.execute(
+        select(User.group_name)
+        .select_from(InventoryRequest)
+        .join(User, User.id == InventoryRequest.requester_id)
+        .where(InventoryRequest.id == request_id)
+    )).first()
+    if scope_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
+    if not check_request_scope(current_user, scope_row[0]):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to deny requests from this group.",
+        )
+
     req = await deny_request(
         db,
         request_id=request_id,
@@ -155,25 +193,26 @@ async def deny(
     await db.commit()
     await db.refresh(req)
 
-    # Notify requester via Telegram DM
-    from sqlalchemy import select
-    from app.models.user import User as UserModel
-    from app.models.item import Item
-    from app.models.bin import Bin
-    requester = (await db.execute(
-        select(UserModel).where(UserModel.id == req.requester_id)
-    )).scalar_one_or_none()
-    if requester and requester.telegram_chat_id:
-        target_name = "unknown item"
-        if req.item_id:
-            item = (await db.execute(select(Item).where(Item.id == req.item_id))).scalar_one_or_none()
-            if item:
-                target_name = item.name
-        elif req.bin_id:
-            bin_obj = (await db.execute(select(Bin).where(Bin.id == req.bin_id))).scalar_one_or_none()
-            if bin_obj:
-                target_name = f"Bin: {bin_obj.label}"
-        await notify_request_denied(requester.telegram_chat_id, target_name, req.id, body.denial_reason)
+    # Non-fatal notification — must not mask a successful denial.
+    try:
+        from app.models.item import Item
+        from app.models.bin import Bin
+        requester = (await db.execute(
+            select(User).where(User.id == req.requester_id)
+        )).scalar_one_or_none()
+        if requester and requester.telegram_chat_id:
+            target_name = "unknown item"
+            if req.item_id:
+                item = (await db.execute(select(Item).where(Item.id == req.item_id))).scalar_one_or_none()
+                if item:
+                    target_name = item.name
+            elif req.bin_id:
+                bin_obj = (await db.execute(select(Bin).where(Bin.id == req.bin_id))).scalar_one_or_none()
+                if bin_obj:
+                    target_name = f"Bin: {bin_obj.label}"
+            await notify_request_denied(requester.telegram_chat_id, target_name, req.id, body.denial_reason)
+    except Exception:
+        log.warning("Failed to send denial notification for request %d", req.id)
 
     return req
 
