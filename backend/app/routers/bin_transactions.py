@@ -1,6 +1,9 @@
+import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+
+log = logging.getLogger(__name__)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +12,7 @@ from app.core.permissions import is_group_lead, require_process_any_transaction
 from app.models.bin_transaction import BinTransaction
 from app.models.user import User
 from app.schemas.bin_transaction import BinCheckoutOut, BinTransactionCreate, BinTransactionOut, BinTransactionReturn
+from app.services import telegram_service
 from app.services.bin_transaction_service import checkout_bin, return_bin
 from app.services.checklist_service import (
     add_return_task_for_bin_transaction,
@@ -39,7 +43,11 @@ async def checkout_bin_endpoint(
     await add_return_task_for_bin_transaction(db, bin_txn, current_user)
 
     await db.commit()
-    await db.refresh(bin_txn)
+    await db.refresh(bin_txn, ["bin", "user"])
+    try:
+        await telegram_service.notify_bin_checkout(bin_txn)
+    except Exception:
+        log.warning("Bin checkout notification failed for bin_txn_id=%s", bin_txn.id)
     return BinCheckoutOut(
         **{k: v for k, v in bin_txn.__dict__.items() if not k.startswith("_")},
         excluded_item_ids=excluded_item_ids,
@@ -84,7 +92,11 @@ async def return_bin_endpoint(
     await auto_complete_return_task_for_bin(db, bin_transaction_id, current_user.id)
 
     await db.commit()
-    await db.refresh(bin_txn)
+    await db.refresh(bin_txn, ["bin", "user"])
+    try:
+        await telegram_service.notify_bin_return(bin_txn)
+    except Exception:
+        log.warning("Bin return notification failed for bin_txn_id=%s", bin_txn.id)
     return bin_txn
 
 

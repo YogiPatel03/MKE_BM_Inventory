@@ -1,7 +1,11 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+log = logging.getLogger(__name__)
 
 from app.core.permissions import can_process_transaction_for, is_group_lead, require_view_all_transactions
 from app.dependencies import get_current_user, get_db
@@ -100,7 +104,10 @@ async def checkout(
 
     # Load relationships for notification
     await db.refresh(transaction, ["item", "user"])
-    await telegram_service.notify_checkout(transaction)
+    try:
+        await telegram_service.notify_checkout(transaction)
+    except Exception:
+        log.warning("Checkout notification failed for transaction_id=%s", transaction.id)
 
     return transaction
 
@@ -143,10 +150,19 @@ async def return_transaction(
     await db.commit()
 
     await db.refresh(transaction, ["item", "user"])
-    request_msg_id = await telegram_service.notify_return_and_request_photo(transaction)
+    try:
+        request_msg_id = await telegram_service.notify_return_and_request_photo(transaction)
+    except Exception:
+        log.warning("Return notification failed for transaction_id=%s", transaction_id)
+        request_msg_id = None
     if request_msg_id:
         transaction.photo_request_message_id = request_msg_id
-        await db.commit()
+    else:
+        # Coordinator send failed or returned None — clear the flag so the
+        # transaction is not left in an unmatchable state (flag True but no
+        # message_id for the bot to match photo replies against).
+        transaction.photo_requested_via_telegram = False
+    await db.commit()
 
     await db.refresh(transaction)
     return transaction

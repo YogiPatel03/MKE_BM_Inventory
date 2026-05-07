@@ -1,10 +1,10 @@
 """
 Telegram service — sends notifications and manages bot state.
 
-All Telegram calls are fire-and-forget; failures are logged but never
-raise exceptions to callers. The bot's coordinator channel is the primary
-notification target; user DMs are used for overdue reminders when a
-telegram_chat_id is linked.
+All public notification functions are fire-and-forget: they catch all
+exceptions internally, log safe context (IDs only — no tokens or message
+bodies), and never raise into callers. This ensures Telegram failures
+cannot affect committed business actions.
 """
 
 import html
@@ -18,6 +18,7 @@ from app.config import settings
 from app.models.transaction import Transaction
 
 if TYPE_CHECKING:
+    from app.models.bin_transaction import BinTransaction
     from app.models.checklist import ChecklistItem
     from app.models.user import User
 
@@ -36,63 +37,105 @@ def get_bot() -> Optional[Bot]:
 
 
 async def _send(chat_id: str, text: str) -> Optional[int]:
-    """Send a message; return message_id or None on failure."""
-    bot = get_bot()
-    if not bot or not chat_id:
+    """Send a message; return message_id or None on failure. Never raises."""
+    if not chat_id:
         return None
     try:
+        bot = get_bot()
+        if not bot:
+            return None
         msg = await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
         return msg.message_id
     except TelegramError as e:
         log.warning("Telegram send failed to %s: %s", chat_id, e)
         return None
+    except Exception:
+        log.exception("Unexpected error in Telegram send to %s", chat_id)
+        return None
+
+
+async def send_user_dm(user: "User", text: str) -> bool:
+    """DM a linked user. Returns True on success, False if unlinked or send failed. Never raises."""
+    if not user or not user.telegram_chat_id:
+        log.debug("Skipping DM for user %s: no Telegram link", getattr(user, "id", "unknown"))
+        return False
+    try:
+        result = await _send(user.telegram_chat_id, text)
+        if result is None:
+            log.warning("DM failed for user_id=%s", user.id)
+        return result is not None
+    except Exception:
+        log.exception("Unexpected error sending DM to user_id=%s", user.id)
+        return False
 
 
 async def notify_checkout(transaction: Transaction) -> None:
-    """Notify coordinator channel when an item is checked out."""
-    if not settings.telegram_coordinator_chat_id:
-        return
+    """Notify coordinator channel and DM the borrower when an item is checked out. Never raises."""
+    try:
+        tg_handle = transaction.user.telegram_handle
+        user_display = html.escape(f"@{tg_handle}" if tg_handle else transaction.user.username)
+        item_name = html.escape(transaction.item.name)
+        due_str = (
+            transaction.due_at.strftime("%b %d, %Y") if transaction.due_at else "no due date"
+        )
 
-    username = html.escape(transaction.user.username)
-    tg_handle = transaction.user.telegram_handle
-    user_display = html.escape(f"@{tg_handle}" if tg_handle else transaction.user.username)
+        if settings.telegram_coordinator_chat_id:
+            coord_text = (
+                f"📦 <b>Checkout</b> #{transaction.id}\n"
+                f"Item: <b>{item_name}</b> × {transaction.quantity}\n"
+                f"User: {user_display}\n"
+                f"Due: {due_str}"
+            )
+            await _send(settings.telegram_coordinator_chat_id, coord_text)
 
-    item_name = html.escape(transaction.item.name)
-    due_str = (
-        transaction.due_at.strftime("%b %d, %Y") if transaction.due_at else "no due date"
-    )
-
-    text = (
-        f"📦 <b>Checkout</b> #{transaction.id}\n"
-        f"Item: <b>{item_name}</b> × {transaction.quantity}\n"
-        f"User: {user_display}\n"
-        f"Due: {due_str}"
-    )
-    await _send(settings.telegram_coordinator_chat_id, text)
+        dm_text = (
+            f"📦 <b>Checkout confirmed</b>\n"
+            f"You checked out <b>{item_name}</b> × {transaction.quantity}\n"
+            f"Transaction: #{transaction.id}\n"
+            f"Due: {due_str}"
+        )
+        await send_user_dm(transaction.user, dm_text)
+    except Exception:
+        log.exception("notify_checkout failed for transaction_id=%s", transaction.id)
 
 
 async def notify_return_and_request_photo(transaction: Transaction) -> Optional[str]:
     """
-    Notify coordinator channel when an item is returned.
-    Returns the message_id of the sent notification so it can be stored on the
+    Notify coordinator channel when an item is returned and DM the borrower.
+    Returns the message_id of the coordinator notification so it can be stored on the
     transaction — this allows the bot to match a photo reply back to the transaction.
+    Never raises; always returns the coordinator message_id even if the borrower DM fails.
     """
-    if not settings.telegram_coordinator_chat_id:
+    try:
+        tg_handle = transaction.user.telegram_handle
+        user_display = html.escape(f"@{tg_handle}" if tg_handle else transaction.user.username)
+        item_name = html.escape(transaction.item.name)
+
+        message_id = None
+        if settings.telegram_coordinator_chat_id:
+            coord_text = (
+                f"✅ <b>Return logged</b> #{transaction.id}\n"
+                f"Item: <b>{item_name}</b> × {transaction.quantity}\n"
+                f"Returned by: {user_display}\n\n"
+                f"📷 No photo was attached. {user_display}, please reply to this message "
+                f"with a condition/return photo for the record."
+            )
+            message_id = await _send(settings.telegram_coordinator_chat_id, coord_text)
+
+        # Borrower DM is fire-and-forget — must not gate returning the coordinator message_id.
+        try:
+            dm_text = (
+                f"✅ <b>Return logged</b>\n"
+                f"Your return of <b>{item_name}</b> × {transaction.quantity} has been recorded."
+            )
+            await send_user_dm(transaction.user, dm_text)
+        except Exception:
+            log.exception("Borrower DM failed for transaction_id=%s", transaction.id)
+
+        return str(message_id) if message_id else None
+    except Exception:
+        log.exception("notify_return_and_request_photo failed for transaction_id=%s", transaction.id)
         return None
-
-    tg_handle = transaction.user.telegram_handle
-    user_display = html.escape(f"@{tg_handle}" if tg_handle else transaction.user.username)
-    item_name = html.escape(transaction.item.name)
-
-    text = (
-        f"✅ <b>Return logged</b> #{transaction.id}\n"
-        f"Item: <b>{item_name}</b> × {transaction.quantity}\n"
-        f"Returned by: {user_display}\n\n"
-        f"📷 No photo was attached. {user_display}, please reply to this message "
-        f"with a condition/return photo for the record."
-    )
-    message_id = await _send(settings.telegram_coordinator_chat_id, text)
-    return str(message_id) if message_id else None
 
 
 async def notify_overdue(transaction: Transaction) -> None:
@@ -123,6 +166,61 @@ async def notify_overdue(transaction: Transaction) -> None:
             f"Due: {due_str}"
         )
         await _send(settings.telegram_coordinator_chat_id, coord_text)
+
+
+async def notify_bin_checkout(bin_txn: "BinTransaction") -> None:
+    """Notify coordinator channel and DM the borrower when a bin is checked out. Never raises."""
+    try:
+        tg_handle = bin_txn.user.telegram_handle
+        user_display = html.escape(f"@{tg_handle}" if tg_handle else bin_txn.user.username)
+        bin_label = html.escape(bin_txn.bin.label)
+        due_str = (
+            bin_txn.due_at.strftime("%b %d, %Y") if bin_txn.due_at else "no due date"
+        )
+
+        if settings.telegram_coordinator_chat_id:
+            coord_text = (
+                f"📦 <b>Bin Checkout</b> #{bin_txn.id}\n"
+                f"Bin: <b>{bin_label}</b>\n"
+                f"User: {user_display}\n"
+                f"Due: {due_str}"
+            )
+            await _send(settings.telegram_coordinator_chat_id, coord_text)
+
+        dm_text = (
+            f"📦 <b>Bin checkout confirmed</b>\n"
+            f"You checked out bin <b>{bin_label}</b>\n"
+            f"Transaction: #{bin_txn.id}\n"
+            f"Due: {due_str}"
+        )
+        await send_user_dm(bin_txn.user, dm_text)
+    except Exception:
+        log.exception("notify_bin_checkout failed for bin_txn_id=%s", bin_txn.id)
+
+
+async def notify_bin_return(bin_txn: "BinTransaction") -> None:
+    """Notify coordinator channel and DM the borrower when a bin is returned. Never raises."""
+    try:
+        tg_handle = bin_txn.user.telegram_handle
+        user_display = html.escape(f"@{tg_handle}" if tg_handle else bin_txn.user.username)
+        bin_label = html.escape(bin_txn.bin.label)
+
+        if settings.telegram_coordinator_chat_id:
+            coord_text = (
+                f"✅ <b>Bin Return</b> #{bin_txn.id}\n"
+                f"Bin: <b>{bin_label}</b>\n"
+                f"Returned by: {user_display}"
+            )
+            await _send(settings.telegram_coordinator_chat_id, coord_text)
+
+        dm_text = (
+            f"✅ <b>Bin return recorded</b>\n"
+            f"Your return of bin <b>{bin_label}</b> has been logged.\n"
+            f"Transaction: #{bin_txn.id}"
+        )
+        await send_user_dm(bin_txn.user, dm_text)
+    except Exception:
+        log.exception("notify_bin_return failed for bin_txn_id=%s", bin_txn.id)
 
 
 async def notify_account_linked(chat_id: str, full_name: str) -> None:
