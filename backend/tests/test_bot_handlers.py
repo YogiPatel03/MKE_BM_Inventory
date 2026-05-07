@@ -335,7 +335,8 @@ async def test_unknown_command_returns_help(db):
         await handle_update(_private_update(111, "alice", "/foobar"), db)
 
     bot.send_message.assert_called_once()
-    assert "/start" in _sent_text(bot)
+    text = _sent_text(bot)
+    assert "/help" in text or "Unknown command" in text
 
 
 # ─── Phase 2 regression tests ─────────────────────────────────────────────────

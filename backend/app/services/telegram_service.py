@@ -5,9 +5,16 @@ All public notification functions are fire-and-forget: they catch all
 exceptions internally, log safe context (IDs only — no tokens or message
 bodies), and never raise into callers. This ensures Telegram failures
 cannot affect committed business actions.
+
+Topic routing:
+  Telegram forum topics share the same supergroup chat_id; each topic has a
+  unique message_thread_id. TELEGRAM_GROUP_TOPIC_THREAD_IDS maps group names
+  to thread IDs. send_to_group_topic() uses this mapping; if the mapping is
+  absent the message falls back to the coordinator chat without a thread.
 """
 
 import html
+import json
 import logging
 from typing import TYPE_CHECKING, Optional
 
@@ -36,15 +43,59 @@ def get_bot() -> Optional[Bot]:
     return _bot
 
 
-async def _send(chat_id: str, text: str) -> Optional[int]:
-    """Send a message; return message_id or None on failure. Never raises."""
+# ─── Topic mapping helpers ────────────────────────────────────────────────────
+
+def _parse_topic_mapping() -> dict[str, int]:
+    """
+    Parse TELEGRAM_GROUP_TOPIC_THREAD_IDS from settings.
+    Returns an empty dict (and logs a warning) on invalid JSON — never raises.
+    """
+    raw = (settings.telegram_group_topic_thread_ids or "").strip()
+    if not raw:
+        return {}
+    try:
+        mapping = json.loads(raw)
+        if not isinstance(mapping, dict):
+            log.warning("TELEGRAM_GROUP_TOPIC_THREAD_IDS is not a JSON object — ignoring")
+            return {}
+        return {str(k): int(v) for k, v in mapping.items()}
+    except (json.JSONDecodeError, ValueError, TypeError):
+        log.warning(
+            "TELEGRAM_GROUP_TOPIC_THREAD_IDS contains invalid JSON — topic routing disabled"
+        )
+        return {}
+
+
+def get_thread_id_for_group(group_name: str) -> Optional[int]:
+    """Return the message_thread_id for a group, or None if not configured."""
+    return _parse_topic_mapping().get(group_name)
+
+
+def get_group_for_thread_id(message_thread_id: int) -> Optional[str]:
+    """Return the group name that maps to this thread ID, or None."""
+    for group, tid in _parse_topic_mapping().items():
+        if tid == message_thread_id:
+            return group
+    return None
+
+
+# ─── Low-level send ───────────────────────────────────────────────────────────
+
+async def _send(chat_id: str, text: str, *, message_thread_id: Optional[int] = None) -> Optional[int]:
+    """
+    Send a message; return message_id or None on failure. Never raises.
+    Pass message_thread_id to route into a forum topic.
+    """
     if not chat_id:
         return None
     try:
         bot = get_bot()
         if not bot:
             return None
-        msg = await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+        kwargs: dict = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        if message_thread_id is not None:
+            kwargs["message_thread_id"] = message_thread_id
+        msg = await bot.send_message(**kwargs)
         return msg.message_id
     except TelegramError as e:
         log.warning("Telegram send failed to %s: %s", chat_id, e)
@@ -52,6 +103,24 @@ async def _send(chat_id: str, text: str) -> Optional[int]:
     except Exception:
         log.exception("Unexpected error in Telegram send to %s", chat_id)
         return None
+
+
+async def send_to_group_topic(group_name: str, text: str) -> Optional[int]:
+    """
+    Send to the coordinator chat, targeting the topic thread for group_name.
+    Falls back to the coordinator chat without a thread if no mapping exists.
+    Returns message_id or None. Never raises.
+    """
+    if not settings.telegram_coordinator_chat_id:
+        log.warning("send_to_group_topic called but TELEGRAM_COORDINATOR_CHAT_ID is not set")
+        return None
+    thread_id = get_thread_id_for_group(group_name)
+    if thread_id is None:
+        log.warning(
+            "No topic thread_id configured for group %s — sending to coordinator chat without thread",
+            group_name,
+        )
+    return await _send(settings.telegram_coordinator_chat_id, text, message_thread_id=thread_id)
 
 
 async def send_user_dm(user: "User", text: str) -> bool:

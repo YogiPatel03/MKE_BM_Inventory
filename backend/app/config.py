@@ -17,9 +17,12 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
     telegram_coordinator_chat_id: str = ""
+    # JSON mapping of group name → message_thread_id, e.g. {"SHISHU_MANDAL":12,"GROUP_1":34}
+    telegram_group_topic_thread_ids: str = ""
 
     # App
     app_name: str = "Cabinet Inventory"
+    app_timezone: str = "America/Chicago"
     environment: str = "development"
     frontend_url: str = "http://localhost:5173"
     backend_url: str = "http://localhost:8000"

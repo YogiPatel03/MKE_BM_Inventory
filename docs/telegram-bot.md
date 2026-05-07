@@ -17,7 +17,10 @@ Telegram calls are made via `python-telegram-bot` v21 (async).
 | Command | Who can use | Description |
 |---|---|---|
 | `/start` | Anyone | Shows help and command list |
-| `/link <token>` | Anyone | Links Telegram account to system user |
+| `/help` | Anyone | Full command list with permission notes |
+| `/whereami` | Anyone (usually admins) | Prints this chat's IDs for Render env var setup |
+| `/whoami` | Anyone | Shows linked account info, or explains how to link |
+| `/link <token>` | Anyone (**DM only**) | Links Telegram account to system user |
 | `/myitems` | Linked users | Shows currently checked-out items |
 | `/overdue` | GROUP_LEAD+ | Lists all overdue checkouts |
 | `/status <item name>` | Anyone | Checks availability of an item |
@@ -30,16 +33,72 @@ Telegram calls are made via `python-telegram-bot` v21 (async).
 1. User goes to the web app **Settings** → **Link Telegram**
 2. Clicks **Generate Link Token** → GET `/api/users/me/link-token`
 3. Backend generates a 32-byte URL-safe token stored in `User.telegram_link_token`
-4. User copies the token and sends `/link <token>` to the bot
-5. Bot looks up the user by `telegram_link_token`, sets `User.telegram_chat_id = chat_id`, clears the token
+4. User copies the token and sends `/link <token>` **in a private DM with the bot**
+5. Bot looks up the user by `telegram_link_token`, sets `User.telegram_chat_id = message.from.id`, clears the token
 6. Bot confirms: "✅ Account linked!"
 
 The token is one-time: it is cleared after use and cannot be reused.
 
+**Important:** `/link` only works in a private DM. Running it in a group or topic will be rejected without consuming the token.
+
+## Identity Contract
+
+`message.chat.id` — where the bot replies (group or supergroup ID when in a group/topic).  
+`message.from.id` — the individual who sent the command (always the personal Telegram ID).
+
+In a **private DM** these are equal. In a **group or topic**, `chat.id` is the group's ID while `from.id` is the individual user's ID. The bot always:
+- resolves the app user by `message.from.id` (not `chat.id`)
+- replies to `message.chat.id` (the group/topic chat)
+- stores `User.telegram_chat_id = message.from.id` (personal DM ID)
+
+This means group commands resolve the correct user and personal DMs always reach the individual.
+
+## Topic / Forum Support
+
+Telegram forum topics do **not** have their own chat IDs. A topic message uses the same supergroup `chat_id` plus a `message_thread_id`. The bot:
+
+1. Reads `message.message_thread_id` from incoming updates.
+2. Passes it to `bot.send_message(message_thread_id=...)` so replies stay inside the same topic.
+3. Uses `TELEGRAM_GROUP_TOPIC_THREAD_IDS` to route outbound group notifications to the correct topic.
+
+### How to find IDs for Render env vars
+
+1. Add the bot to your supergroup (or topic).
+2. Send `/whereami` inside the chat or topic where you want the bot to send messages.
+3. The bot replies with:
+   - `chat_id` — use this as `TELEGRAM_COORDINATOR_CHAT_ID`
+   - `message_thread_id` — the thread ID for this specific topic (absent if not a topic)
+   - `actor_telegram_id` — your personal Telegram ID
+4. Repeat step 2–3 for each group topic you want to map.
+5. Build the JSON mapping (see below) and set it in Render.
+
+### Environment Variables
+
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
+| `TELEGRAM_WEBHOOK_SECRET` | Random secret in the webhook URL |
+| `TELEGRAM_COORDINATOR_CHAT_ID` | Supergroup chat ID for coordinator alerts (e.g. `-100xxxxxxxxxx`) |
+| `TELEGRAM_GROUP_TOPIC_THREAD_IDS` | JSON mapping of group name → `message_thread_id` |
+| `APP_TIMEZONE` | Reserved for upcoming scheduled reminder/checklist jobs (default: `America/Chicago`). **Not yet wired into the scheduler** — existing jobs run in server time. Will be applied in a future prompt. |
+
+**TELEGRAM_GROUP_TOPIC_THREAD_IDS example:**
+```
+{"SHISHU_MANDAL":12,"GROUP_1":34,"GROUP_2":56,"GROUP_3":78}
+```
+
+- Replace the numbers with the actual `message_thread_id` values from `/whereami`.
+- If a group is missing from the mapping, notifications for that group fall back to the coordinator chat without a thread (and a warning is logged).
+- Invalid JSON does not crash app startup — it logs a warning and treats the mapping as empty.
+
+### Migrated supergroups
+
+If Telegram migrates a regular group to a supergroup, the `chat_id` changes. Run `/whereami` again after migration and update `TELEGRAM_COORDINATOR_CHAT_ID`.
+
 ## Notification Events
 
 ### Checkout notification
-Sent to the coordinator channel when any checkout occurs.
+Sent to the coordinator channel and as a DM to the borrower.
 ```
 📦 Checkout #42
 Item: Safety Goggles × 2
@@ -48,7 +107,7 @@ Due: Jun 15, 2025
 ```
 
 ### Return notification + photo request
-Sent to the coordinator channel when an item is returned via the web app. The bot's message_id is stored on the `Transaction` so that a photo reply can be matched back to it.
+Sent to the coordinator channel when an item is returned. The bot's message_id is stored on the `Transaction` so a photo reply can be matched back to it.
 ```
 ✅ Return logged #42
 Item: Safety Goggles × 2
@@ -59,7 +118,7 @@ with a condition/return photo for the record.
 ```
 
 ### Purchase notification + receipt request
-Sent **both** to the coordinator channel and as a **DM** to the purchaser when a purchase is logged. The coordinator channel message_id is stored on the `ReceiptRecord` placeholder so photo replies can be matched.
+Sent to the coordinator channel and as a DM to the purchaser. The coordinator channel message_id is stored on the `ReceiptRecord` for photo matching.
 
 **Coordinator channel:**
 ```
@@ -78,16 +137,9 @@ By: @bob
 ```
 
 ### Overdue reminder
-Sent hourly (when the scheduler detects overdue items).
+Sent hourly when the scheduler detects overdue items.
 - **DM** to the borrower (if `telegram_chat_id` is linked)
 - **Coordinator channel** post listing the item and borrower
-
-```
-⚠️ Overdue item reminder
-You have an overdue checkout: Safety Goggles × 2
-Was due: Jun 10, 2025
-Please return it as soon as possible.
-```
 
 ### Request notification
 Sent to the coordinator channel when a user submits an inventory request.
@@ -99,6 +151,10 @@ Reason: Workshop session
 
 /approve 3  |  /deny 3
 ```
+
+### Personal DMs
+
+Checkout, return, overdue, and request approved/denied notifications that go to individual users are always sent to `User.telegram_chat_id` — the personal DM chat ID stored at linking time. These are never routed to group topics.
 
 ## Photo Reply Handling
 
@@ -114,8 +170,10 @@ Both handlers only process photos sent in the coordinator channel.
 
 - Webhook URL contains a secret path segment (`TELEGRAM_WEBHOOK_SECRET`)
 - The router returns 403 if the secret doesn't match
-- Bot commands that require elevated permissions check `User.role` after looking up the user by `telegram_chat_id`
-- Unlinked users cannot use most commands
+- `/link` only works in a private DM — group/topic attempts are rejected without consuming the token
+- The rejection message does not echo any part of the submitted token
+- Bot commands that require elevated permissions check `User.role` after looking up the user by `message.from.id`
+- Unique constraint on `User.telegram_chat_id` prevents two accounts sharing one Telegram identity
 
 ## Webhook vs Polling Decision
 
@@ -128,6 +186,7 @@ Both handlers only process photos sent in the coordinator channel.
 
 ## Adding New Commands
 
-1. Add a handler function in `app/bot/handlers.py`
+1. Add a handler function in `app/bot/handlers.py` with signature `async def cmd_xxx(ctx: BotContext, db: AsyncSession) -> None`
 2. Register it in the `handle_update()` dispatch block
-3. Add the command to BotFather via `/setcommands`
+3. Use `await _send(ctx.reply_chat_id, text, message_thread_id=ctx.message_thread_id)` so replies stay in the correct topic
+4. Add the command to BotFather via `/setcommands`
