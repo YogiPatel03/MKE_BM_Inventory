@@ -73,6 +73,14 @@ async def submit_request(
         req.telegram_message_id = msg_id
         await db.commit()
 
+    # DM the requester to confirm submission — non-fatal.
+    try:
+        if current_user.telegram_chat_id:
+            from app.services.telegram_service import notify_request_submitted
+            await notify_request_submitted(current_user.telegram_chat_id, target_name, req.id)
+    except Exception:
+        log.warning("Failed to send submission notification for request %d", req.id)
+
     return req
 
 

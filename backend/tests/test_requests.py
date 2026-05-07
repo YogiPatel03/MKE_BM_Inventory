@@ -749,3 +749,49 @@ async def test_telegram_requests_filters_by_group(db: AsyncSession):
     combined = "\n".join(sent)
     assert f"#{req1.id}" in combined, "gl1 should see user1's request (same group)"
     assert f"#{req2.id}" not in combined, "gl1 must not see user2's request (different group)"
+
+
+# ─── Submission DM tests ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_submit_request_dms_requester(client: AsyncClient, db: AsyncSession):
+    """Submitting a request DMs the requester when their Telegram is linked."""
+    coordinator, requester, item = await _seed(db)
+    requester.telegram_chat_id = "alice_dm_tg"
+    await db.commit()
+
+    alice_token = await _login(client, "alice", "alicepass")
+
+    with patch("app.services.telegram_service.notify_request_submitted", new=AsyncMock()) as mock_notify:
+        r = await client.post(
+            "/api/requests",
+            json={"item_id": item.id, "quantity_requested": 1},
+            headers={"Authorization": f"Bearer {alice_token}"},
+        )
+
+    assert r.status_code == 201
+    mock_notify.assert_awaited_once()
+    a = mock_notify.call_args.args
+    assert a[0] == "alice_dm_tg"
+    assert "Hammer" in a[1]
+
+
+@pytest.mark.asyncio
+async def test_submit_request_dm_failure_does_not_affect_response(client: AsyncClient, db: AsyncSession):
+    """A failing submission DM must not affect the 201 response."""
+    coordinator, requester, item = await _seed(db)
+    requester.telegram_chat_id = "alice_dm_tg2"
+    await db.commit()
+
+    alice_token = await _login(client, "alice", "alicepass")
+
+    with patch("app.services.telegram_service.notify_request_submitted",
+               new=AsyncMock(side_effect=RuntimeError("Telegram down"))):
+        r = await client.post(
+            "/api/requests",
+            json={"item_id": item.id, "quantity_requested": 1},
+            headers={"Authorization": f"Bearer {alice_token}"},
+        )
+
+    assert r.status_code == 201
+    assert r.json()["status"] == "PENDING"

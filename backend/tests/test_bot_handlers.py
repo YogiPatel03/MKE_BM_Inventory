@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.handlers import handle_update
 from app.core.security import hash_password
+from app.models.bin import Bin
+from app.models.bin_transaction import BinTransaction, BinTransactionStatus
 from app.models.cabinet import Cabinet
 from app.models.inventory_request import InventoryRequest, RequestStatus
 from app.models.item import Item
@@ -523,3 +525,313 @@ async def test_link_integrity_error_handled(db):
     await db.refresh(user)
     assert user.telegram_link_token == "race_token"  # token preserved
     assert user.telegram_chat_id is None              # no mutation committed
+
+
+# ─── Prompt 2: approve/deny reliability + requester DMs ───────────────────────
+
+async def _seed_p2_request(
+    db: AsyncSession, *, requester_linked: bool = False
+) -> tuple:
+    """Seed coordinator (tg='777') + requester + item + pending request."""
+    coord_role = _coord_role()
+    user_role = _user_role()
+    db.add_all([coord_role, user_role])
+    await db.flush()
+
+    coord = User(
+        full_name="Coord", username="coord", password_hash=hash_password("pass"),
+        role_id=coord_role.id, telegram_chat_id="777",
+    )
+    requester = User(
+        full_name="Alice", username="alice", password_hash=hash_password("pass"),
+        role_id=user_role.id,
+        telegram_chat_id="888" if requester_linked else None,
+    )
+    db.add_all([coord, requester])
+
+    room = Room(name="Room A")
+    db.add(room)
+    await db.flush()
+    cabinet = Cabinet(name="Cab A", room_id=room.id)
+    db.add(cabinet)
+    await db.flush()
+    item = Item(name="Drill", quantity_total=5, quantity_available=5, cabinet_id=cabinet.id)
+    db.add(item)
+    await db.flush()
+
+    req = InventoryRequest(
+        requester_id=requester.id, item_id=item.id,
+        quantity_requested=1, status=RequestStatus.PENDING,
+    )
+    db.add(req)
+    await db.commit()
+    await db.refresh(req)
+    return coord, requester, item, req
+
+
+@pytest.mark.asyncio
+async def test_approve_commits_status_fulfilled(db):
+    """cmd_approve transitions request to FULFILLED and commits."""
+    coord, requester, item, req = await _seed_p2_request(db)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/approve {req.id}"), db)
+
+    await db.refresh(req)
+    assert req.status == RequestStatus.FULFILLED
+
+
+@pytest.mark.asyncio
+async def test_approve_reply_shows_real_item_name(db):
+    """Bot reply for a successful approval names the item, not 'Item #N'."""
+    coord, requester, item, req = await _seed_p2_request(db)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/approve {req.id}"), db)
+
+    reply = bot.send_message.call_args_list[0].kwargs["text"]
+    assert "Drill" in reply
+    assert f"Item #{item.id}" not in reply
+
+
+@pytest.mark.asyncio
+async def test_approve_dms_linked_requester(db):
+    """When requester has telegram_chat_id, notify_request_approved is called."""
+    coord, requester, item, req = await _seed_p2_request(db, requester_linked=True)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.services.telegram_service.notify_request_approved", new=AsyncMock()) as mock_notify:
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/approve {req.id}"), db)
+
+    mock_notify.assert_awaited_once()
+    a = mock_notify.call_args.args
+    assert a[0] == "888"
+    assert "Drill" in a[1]
+    assert a[2] == req.id
+
+
+@pytest.mark.asyncio
+async def test_approve_already_processed_friendly_message(db):
+    """Attempting to approve an already-FULFILLED request gives a friendly message."""
+    coord, requester, item, req = await _seed_p2_request(db)
+    req.status = RequestStatus.FULFILLED
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/approve {req.id}"), db)
+
+    reply = _sent_text(bot)
+    assert "already been processed" in reply
+    assert "RequestStatus" not in reply
+
+
+@pytest.mark.asyncio
+async def test_deny_commits_status_denied(db):
+    """cmd_deny transitions request to DENIED and commits."""
+    coord, requester, item, req = await _seed_p2_request(db)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/deny {req.id}"), db)
+
+    await db.refresh(req)
+    assert req.status == RequestStatus.DENIED
+
+
+@pytest.mark.asyncio
+async def test_deny_with_reason_in_reply(db):
+    """Denial reason and item name both appear in the bot reply."""
+    coord, requester, item, req = await _seed_p2_request(db)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/deny {req.id} out of stock"), db)
+
+    reply = bot.send_message.call_args_list[0].kwargs["text"]
+    assert "Drill" in reply
+    assert "out of stock" in reply
+
+
+@pytest.mark.asyncio
+async def test_deny_dms_linked_requester(db):
+    """When requester has telegram_chat_id, notify_request_denied is called with reason."""
+    coord, requester, item, req = await _seed_p2_request(db, requester_linked=True)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.services.telegram_service.notify_request_denied", new=AsyncMock()) as mock_notify:
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/deny {req.id} out of stock"), db)
+
+    mock_notify.assert_awaited_once()
+    a = mock_notify.call_args.args
+    assert a[0] == "888"
+    assert "Drill" in a[1]
+    assert a[2] == req.id
+    assert a[3] == "out of stock"
+
+
+@pytest.mark.asyncio
+async def test_deny_already_processed_friendly_message(db):
+    """Attempting to deny an already-DENIED request gives a friendly message."""
+    coord, requester, item, req = await _seed_p2_request(db)
+    req.status = RequestStatus.DENIED
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/deny {req.id}"), db)
+
+    reply = _sent_text(bot)
+    assert "already been processed" in reply
+    assert "RequestStatus" not in reply
+
+
+@pytest.mark.asyncio
+async def test_approve_insufficient_stock_rolls_back(db):
+    """cmd_approve with insufficient stock rolls back, sends safe message, no transaction created."""
+    coord, requester, item, req = await _seed_p2_request(db)
+    item.quantity_available = 0
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/approve {req.id}"), db)
+
+    await db.refresh(req)
+    assert req.status == RequestStatus.PENDING
+    assert req.approver_id is None
+
+    reply = _sent_text(bot)
+    assert "❌" in reply
+    assert "Error:" not in reply
+
+
+@pytest.mark.asyncio
+async def test_approve_bin_already_checked_out_keeps_pending(db):
+    """cmd_approve for a bin request when the bin is already checked out keeps request PENDING."""
+    coord_role = _coord_role()
+    user_role = _user_role()
+    db.add_all([coord_role, user_role])
+    await db.flush()
+
+    coord = User(
+        full_name="Coord", username="coord", password_hash=hash_password("pass"),
+        role_id=coord_role.id, telegram_chat_id="777",
+    )
+    requester = User(
+        full_name="Alice", username="alice", password_hash=hash_password("pass"),
+        role_id=user_role.id,
+    )
+    db.add_all([coord, requester])
+
+    room = Room(name="Room A")
+    db.add(room)
+    await db.flush()
+    cabinet = Cabinet(name="Cab A", room_id=room.id)
+    db.add(cabinet)
+    await db.flush()
+    bin_obj = Bin(label="BinA", cabinet_id=cabinet.id)
+    db.add(bin_obj)
+    await db.flush()
+
+    # Pre-existing checkout of the bin
+    db.add(BinTransaction(
+        bin_id=bin_obj.id, user_id=requester.id,
+        processed_by_user_id=coord.id,
+        status=BinTransactionStatus.CHECKED_OUT,
+    ))
+
+    req = InventoryRequest(
+        requester_id=requester.id, bin_id=bin_obj.id,
+        quantity_requested=1, status=RequestStatus.PENDING,
+    )
+    db.add(req)
+    await db.commit()
+    await db.refresh(req)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/approve {req.id}"), db)
+
+    await db.refresh(req)
+    assert req.status == RequestStatus.PENDING
+
+    reply = _sent_text(bot)
+    assert "already been processed" not in reply
+    assert "❌" in reply
+
+
+@pytest.mark.asyncio
+async def test_approve_dm_failure_does_not_rollback(db):
+    """Requester DM failure after a successful approval does not roll back the commit."""
+    coord, requester, item, req = await _seed_p2_request(db, requester_linked=True)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.services.telegram_service.notify_request_approved",
+               new=AsyncMock(side_effect=RuntimeError("TG down"))):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/approve {req.id}"), db)
+
+    await db.refresh(req)
+    assert req.status == RequestStatus.FULFILLED
+
+
+@pytest.mark.asyncio
+async def test_deny_dm_failure_does_not_rollback(db):
+    """Requester DM failure after a successful denial does not roll back the commit."""
+    coord, requester, item, req = await _seed_p2_request(db, requester_linked=True)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.services.telegram_service.notify_request_denied",
+               new=AsyncMock(side_effect=RuntimeError("TG down"))):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/deny {req.id} no reason"), db)
+
+    await db.refresh(req)
+    assert req.status == RequestStatus.DENIED
+
+
+@pytest.mark.asyncio
+async def test_approve_unexpected_error_rolls_back_safe_message(db):
+    """Unexpected service error in cmd_approve: rollback, safe generic message, no raw details leaked."""
+    coord, requester, item, req = await _seed_p2_request(db)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.services.request_service.approve_request",
+               side_effect=RuntimeError("internal: db_password=secret")):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/approve {req.id}"), db)
+
+    await db.refresh(req)
+    assert req.status == RequestStatus.PENDING
+    assert req.approver_id is None
+
+    reply = _sent_text(bot)
+    assert "❌" in reply
+    assert "db_password" not in reply
+    assert "Could not process" in reply
+
+
+@pytest.mark.asyncio
+async def test_deny_unexpected_error_rolls_back_safe_message(db):
+    """Unexpected service error in cmd_deny: rollback, safe generic message, no raw details leaked."""
+    coord, requester, item, req = await _seed_p2_request(db)
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.services.request_service.deny_request",
+               side_effect=RuntimeError("internal: auth_token=xyz")):
+        await handle_update(_group_update(777, "coord_tg", -100888, f"/deny {req.id} reason"), db)
+
+    await db.refresh(req)
+    assert req.status == RequestStatus.PENDING
+    assert req.approver_id is None
+
+    reply = _sent_text(bot)
+    assert "❌" in reply
+    assert "auth_token" not in reply
+    assert "Could not process" in reply

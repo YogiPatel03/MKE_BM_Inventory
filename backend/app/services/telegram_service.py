@@ -163,6 +163,16 @@ async def notify_low_stock(item_name: str, quantity_available: int, threshold: i
     await _send(settings.telegram_coordinator_chat_id, text)
 
 
+async def notify_request_submitted(requester_chat_id: str, item_name: str, request_id: int) -> None:
+    """DM the requester confirming their request was submitted and is pending."""
+    text = (
+        f"📋 <b>Request submitted</b>\n"
+        f"Your request #{request_id} for <b>{html.escape(item_name)}</b> "
+        f"has been submitted and is pending approval."
+    )
+    await _send(requester_chat_id, text)
+
+
 async def notify_request_approved(requester_chat_id: str, item_name: str, request_id: int) -> None:
     """DM the requester when their checkout request is approved."""
     text = (

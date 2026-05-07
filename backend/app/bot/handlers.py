@@ -24,6 +24,7 @@ Identity contract:
   DM the bot, and run /link <new-token>.
 """
 
+import html as _html
 import logging
 from typing import Any
 
@@ -487,26 +488,48 @@ async def cmd_approve(reply_chat_id: str, actor_tg_id: str, request_id_str: str,
         return
 
     # Mutation — isolated from post-commit notifications.
+    from app.core.exceptions import InsufficientStockError, TransactionConflictError
     try:
         req = await approve_request(db, request_id=request_id, approver_id=user.id, due_at=None)
         await db.commit()
-    except Exception as e:
-        await _send(reply_chat_id, f"❌ Error: {e}")
+    except TransactionConflictError as e:
+        await db.rollback()
+        detail = str(e.detail)
+        if any(s in detail for s in ("FULFILLED", "DENIED", "CANCELLED")):
+            await _send(reply_chat_id, f"❌ Request #{request_id} has already been processed.")
+        else:
+            await _send(reply_chat_id, f"❌ Cannot approve request #{request_id}: {_html.escape(detail)}")
+        return
+    except InsufficientStockError as e:
+        await db.rollback()
+        await _send(reply_chat_id, f"❌ Cannot approve: {_html.escape(str(e.detail))}")
+        return
+    except Exception:
+        await db.rollback()
+        log.exception("Unexpected error in cmd_approve for request %s", request_id)
+        await _send(reply_chat_id, "❌ Could not process the request. Please try again or check the web app.")
         return
 
-    # Commit succeeded — report and notify (non-fatal).
-    target_name = f"Bin #{req.bin_id}" if req.bin_id else f"Item #{req.item_id}"
-    await _send(reply_chat_id, f"✅ Request #{req.id} approved ({target_name}).")
+    # Commit succeeded — resolve real name, report, and notify (non-fatal).
+    from app.models.item import Item
+    from app.models.bin import Bin
+    target_name = "unknown item"
+    if req.item_id:
+        item = (await db.execute(select(Item).where(Item.id == req.item_id))).scalar_one_or_none()
+        if item:
+            target_name = item.name
+    elif req.bin_id:
+        bin_obj = (await db.execute(select(Bin).where(Bin.id == req.bin_id))).scalar_one_or_none()
+        if bin_obj:
+            target_name = f"Bin: {bin_obj.label}"
+
+    await _send(reply_chat_id, f"✅ Request #{req.id} approved ({_html.escape(target_name)}).")
 
     try:
-        requester_result = await db.execute(select(User).where(User.id == req.requester_id))
-        requester = requester_result.scalar_one_or_none()
+        requester = (await db.execute(select(User).where(User.id == req.requester_id))).scalar_one_or_none()
         if requester and requester.telegram_chat_id:
-            from app.services.telegram_service import _send as tg_send
-            await tg_send(
-                requester.telegram_chat_id,
-                f"✅ Your request #{req.id} for <b>{target_name}</b> has been approved!",
-            )
+            from app.services.telegram_service import notify_request_approved
+            await notify_request_approved(requester.telegram_chat_id, target_name, req.id)
     except Exception:
         log.warning("Failed to notify requester for request %d", req.id)
 
@@ -551,27 +574,42 @@ async def cmd_deny(reply_chat_id: str, actor_tg_id: str, request_id_str: str, re
         return
 
     # Mutation — isolated from post-commit notifications.
+    from app.core.exceptions import TransactionConflictError
     try:
         req = await deny_request(
             db, request_id=request_id, approver_id=user.id, denial_reason=reason
         )
         await db.commit()
-    except Exception as e:
-        await _send(reply_chat_id, f"❌ Error: {e}")
+    except TransactionConflictError:
+        await db.rollback()
+        await _send(reply_chat_id, f"❌ Request #{request_id} has already been processed.")
+        return
+    except Exception:
+        await db.rollback()
+        log.exception("Unexpected error in cmd_deny for request %s", request_id)
+        await _send(reply_chat_id, "❌ Could not process the request. Please try again or check the web app.")
         return
 
-    # Commit succeeded — report and notify (non-fatal).
-    await _send(reply_chat_id, f"❌ Request #{req.id} denied.")
+    # Commit succeeded — resolve real name, report, and notify (non-fatal).
+    from app.models.item import Item
+    from app.models.bin import Bin
+    target_name = "unknown item"
+    if req.item_id:
+        item = (await db.execute(select(Item).where(Item.id == req.item_id))).scalar_one_or_none()
+        if item:
+            target_name = item.name
+    elif req.bin_id:
+        bin_obj = (await db.execute(select(Bin).where(Bin.id == req.bin_id))).scalar_one_or_none()
+        if bin_obj:
+            target_name = f"Bin: {bin_obj.label}"
+
+    reason_line = f"\nReason: {_html.escape(reason)}" if reason else ""
+    await _send(reply_chat_id, f"❌ Request #{req.id} denied ({_html.escape(target_name)}).{reason_line}")
 
     try:
-        requester_result = await db.execute(select(User).where(User.id == req.requester_id))
-        requester = requester_result.scalar_one_or_none()
+        requester = (await db.execute(select(User).where(User.id == req.requester_id))).scalar_one_or_none()
         if requester and requester.telegram_chat_id:
-            from app.services.telegram_service import _send as tg_send
-            reason_text = f"\nReason: {reason}" if reason else ""
-            await tg_send(
-                requester.telegram_chat_id,
-                f"❌ Your request #{req.id} was denied.{reason_text}",
-            )
+            from app.services.telegram_service import notify_request_denied
+            await notify_request_denied(requester.telegram_chat_id, target_name, req.id, reason)
     except Exception:
         log.warning("Failed to notify requester for request %d", req.id)
