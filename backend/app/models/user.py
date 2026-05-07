@@ -36,7 +36,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
     telegram_handle: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    telegram_chat_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    telegram_chat_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, unique=True)
     telegram_link_token: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
 
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False)

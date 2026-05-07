@@ -6,14 +6,29 @@ the appropriate command handler based on the message text.
 
 Account linking flow:
   1. User clicks "Link Telegram" in web app → gets a one-time token
-  2. User sends /link <token> to the bot
+  2. User DMs the bot and sends /link <token>
   3. Bot matches token to User.telegram_link_token, sets telegram_chat_id, clears token
+
+Identity contract:
+  reply_chat_id — message["chat"]["id"] — where the bot replies (group or DM)
+  actor_tg_id   — message["from"]["id"] — who sent the command; used for DB user lookup
+
+  In a private DM these are equal. In a group chat.id is the group ID while
+  from.id is the individual user's Telegram ID. All user lookups must use
+  actor_tg_id, never reply_chat_id, so group commands resolve the correct user.
+
+  User.telegram_chat_id stores the user's personal DM chat ID (== from.id when
+  linked correctly from a private chat). If a user previously ran /link from a
+  group, their telegram_chat_id will be the group ID and commands will fail.
+  To fix: generate a new link token in the web app (Settings → Link Telegram),
+  DM the bot, and run /link <new-token>.
 """
 
 import logging
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -26,20 +41,36 @@ from app.services.telegram_service import get_bot, notify_account_linked
 
 log = logging.getLogger(__name__)
 
+_NOT_LINKED_MSG = (
+    "❌ Account not linked. DM this bot, send /start, then /link &lt;token&gt;.\n"
+    "Get your token from the web app: Settings → Link Telegram."
+)
+
 
 async def handle_update(body: dict[str, Any], db: AsyncSession) -> None:
     message = body.get("message") or body.get("edited_message")
     if not message:
         return
 
-    chat_id = str(message["chat"]["id"])
+    sender = message.get("from")
+    if not sender:
+        # Channel posts have no "from"; nothing to act on.
+        return
+
+    reply_chat_id = str(message["chat"]["id"])
+    actor_tg_id = str(sender["id"])
+    actor_username: str | None = sender.get("username")
+    chat_type: str = message["chat"].get("type", "private")
+    # Preserved for future topic-based routing; not used for dispatch yet.
+    message_thread_id: int | None = message.get("message_thread_id")  # noqa: F841
+
     text: str = message.get("text", "")
 
     # Photo reply: could be a return condition photo or a receipt photo
     if message.get("photo") and message.get("reply_to_message"):
-        handled = await handle_receipt_photo_reply(message, chat_id, db)
+        handled = await handle_receipt_photo_reply(message, reply_chat_id, db)
         if not handled:
-            await handle_photo_reply(message, chat_id, db)
+            await handle_photo_reply(message, reply_chat_id, db)
         return
 
     if not text.startswith("/"):
@@ -49,28 +80,28 @@ async def handle_update(body: dict[str, Any], db: AsyncSession) -> None:
     command = parts[0].lower().split("@")[0]  # strip @BotName suffix
 
     if command == "/start":
-        await cmd_start(chat_id)
+        await cmd_start(reply_chat_id)
     elif command == "/link" and len(parts) == 2:
-        await cmd_link(chat_id, parts[1], db)
+        await cmd_link(reply_chat_id, actor_tg_id, actor_username, chat_type, parts[1], db)
     elif command == "/myitems":
-        await cmd_my_items(chat_id, db)
+        await cmd_my_items(reply_chat_id, actor_tg_id, db)
     elif command == "/overdue":
-        await cmd_overdue(chat_id, db)
+        await cmd_overdue(reply_chat_id, actor_tg_id, db)
     elif command == "/status" and len(parts) >= 2:
         item_query = " ".join(parts[1:])
-        await cmd_item_status(chat_id, item_query, db)
+        await cmd_item_status(reply_chat_id, item_query, db)
     elif command == "/requests":
-        await cmd_requests(chat_id, db)
+        await cmd_requests(reply_chat_id, actor_tg_id, db)
     elif command == "/approve" and len(parts) == 2:
-        await cmd_approve(chat_id, parts[1], db)
+        await cmd_approve(reply_chat_id, actor_tg_id, parts[1], db)
     elif command == "/deny" and len(parts) >= 2:
         reason = " ".join(parts[2:]) if len(parts) > 2 else None
-        await cmd_deny(chat_id, parts[1], reason, db)
+        await cmd_deny(reply_chat_id, actor_tg_id, parts[1], reason, db)
     else:
         await _send(
-            chat_id,
-            "Unknown command. Try /start, /myitems, /overdue, /status <item>, /requests, "
-            "/approve <id>, /deny <id> [reason]",
+            reply_chat_id,
+            "Unknown command. Try /start, /myitems, /overdue, /status &lt;item&gt;, /requests, "
+            "/approve &lt;id&gt;, /deny &lt;id&gt; [reason]",
         )
 
 
@@ -214,30 +245,71 @@ async def cmd_start(chat_id: str) -> None:
     await _send(chat_id, text)
 
 
-async def cmd_link(chat_id: str, token: str, db: AsyncSession) -> None:
+async def cmd_link(
+    reply_chat_id: str,
+    actor_tg_id: str,
+    actor_username: str | None,
+    chat_type: str,
+    token: str,
+    db: AsyncSession,
+) -> None:
+    if chat_type != "private":
+        await _send(
+            reply_chat_id,
+            "⚠️ For security, /link must be run in a private DM with this bot.\n"
+            "Please open a direct message with this bot and send /link &lt;token&gt;.",
+        )
+        return
+
     result = await db.execute(
         select(User).where(User.telegram_link_token == token, User.is_active == True)
     )
     user = result.scalar_one_or_none()
 
     if not user:
-        await _send(chat_id, "❌ Invalid or expired link token. Generate a new one from the web app.")
+        await _send(reply_chat_id, "❌ Invalid or expired link token. Generate a new one from the web app.")
         return
 
-    user.telegram_chat_id = chat_id
-    user.telegram_link_token = None  # consume the token
-    await db.commit()
+    # Prevent two app users from sharing the same Telegram identity.
+    dup_result = await db.execute(
+        select(User).where(User.telegram_chat_id == actor_tg_id, User.is_active == True)
+    )
+    existing = dup_result.scalar_one_or_none()
+    if existing and existing.id != user.id:
+        await _send(
+            reply_chat_id,
+            "❌ This Telegram account is already linked to another user. Contact an admin.",
+        )
+        return
 
-    await notify_account_linked(chat_id, user.full_name)
+    user.telegram_chat_id = actor_tg_id  # personal DM chat ID; equals reply_chat_id in a private chat
+    user.telegram_link_token = None  # consume the one-time token
+    if actor_username:
+        user.telegram_handle = actor_username
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Race: two concurrent /link requests from the same Telegram actor both passed
+        # the pre-check above. The losing commit hits the unique constraint; roll back
+        # so the token is preserved and the user can try again.
+        await db.rollback()
+        await _send(
+            reply_chat_id,
+            "❌ This Telegram account is already linked to another user. Contact an admin.",
+        )
+        return
+
+    await notify_account_linked(reply_chat_id, user.full_name)
 
 
-async def cmd_my_items(chat_id: str, db: AsyncSession) -> None:
+async def cmd_my_items(reply_chat_id: str, actor_tg_id: str, db: AsyncSession) -> None:
     result = await db.execute(
-        select(User).where(User.telegram_chat_id == chat_id, User.is_active == True)
+        select(User).where(User.telegram_chat_id == actor_tg_id, User.is_active == True)
     )
     user = result.scalar_one_or_none()
     if not user:
-        await _send(chat_id, "❌ Account not linked. Use /link <token> first.")
+        await _send(reply_chat_id, _NOT_LINKED_MSG)
         return
 
     tx_result = await db.execute(
@@ -252,7 +324,7 @@ async def cmd_my_items(chat_id: str, db: AsyncSession) -> None:
     transactions = tx_result.scalars().all()
 
     if not transactions:
-        await _send(chat_id, "✅ You have no items currently checked out.")
+        await _send(reply_chat_id, "✅ You have no items currently checked out.")
         return
 
     lines = ["<b>Your checked-out items:</b>"]
@@ -261,23 +333,22 @@ async def cmd_my_items(chat_id: str, db: AsyncSession) -> None:
         status_icon = "⏰" if t.status == TransactionStatus.OVERDUE else "📦"
         lines.append(f"{status_icon} {t.item.name} × {t.quantity} — due {due} (#{t.id})")
 
-    await _send(chat_id, "\n".join(lines))
+    await _send(reply_chat_id, "\n".join(lines))
 
 
-async def cmd_overdue(chat_id: str, db: AsyncSession) -> None:
-    # Only allow coordinators/admins
+async def cmd_overdue(reply_chat_id: str, actor_tg_id: str, db: AsyncSession) -> None:
     user_result = await db.execute(
         select(User)
-        .where(User.telegram_chat_id == chat_id, User.is_active == True)
+        .where(User.telegram_chat_id == actor_tg_id, User.is_active == True)
         .options(selectinload(User.role))
     )
     user = user_result.scalar_one_or_none()
     if not user:
-        await _send(chat_id, "❌ Account not linked. Use /link <token> first.")
+        await _send(reply_chat_id, _NOT_LINKED_MSG)
         return
 
     if not (user.role.can_view_all_transactions or user.role.can_manage_users):
-        await _send(chat_id, "❌ This command requires coordinator access.")
+        await _send(reply_chat_id, "❌ This command requires coordinator access.")
         return
 
     tx_result = await db.execute(
@@ -289,7 +360,7 @@ async def cmd_overdue(chat_id: str, db: AsyncSession) -> None:
     transactions = tx_result.scalars().all()
 
     if not transactions:
-        await _send(chat_id, "✅ No overdue checkouts.")
+        await _send(reply_chat_id, "✅ No overdue checkouts.")
         return
 
     lines = [f"<b>⏰ Overdue items ({len(transactions)}):</b>"]
@@ -298,10 +369,10 @@ async def cmd_overdue(chat_id: str, db: AsyncSession) -> None:
         handle = f"@{t.user.telegram_handle}" if t.user.telegram_handle else t.user.username
         lines.append(f"• {t.item.name} × {t.quantity} — {handle} — due {due} (#{t.id})")
 
-    await _send(chat_id, "\n".join(lines))
+    await _send(reply_chat_id, "\n".join(lines))
 
 
-async def cmd_item_status(chat_id: str, item_query: str, db: AsyncSession) -> None:
+async def cmd_item_status(reply_chat_id: str, item_query: str, db: AsyncSession) -> None:
     from app.models.item import Item
 
     result = await db.execute(
@@ -310,7 +381,7 @@ async def cmd_item_status(chat_id: str, item_query: str, db: AsyncSession) -> No
     items = result.scalars().all()
 
     if not items:
-        await _send(chat_id, f"❌ No active items matching '{item_query}'")
+        await _send(reply_chat_id, f"❌ No active items matching '{item_query}'")
         return
 
     lines = [f"<b>Search results for '{item_query}':</b>"]
@@ -318,25 +389,25 @@ async def cmd_item_status(chat_id: str, item_query: str, db: AsyncSession) -> No
         avail = "✅ Available" if item.quantity_available > 0 else "❌ Out of stock"
         lines.append(f"• {item.name} — {item.quantity_available}/{item.quantity_total} {avail}")
 
-    await _send(chat_id, "\n".join(lines))
+    await _send(reply_chat_id, "\n".join(lines))
 
 
-async def cmd_requests(chat_id: str, db: AsyncSession) -> None:
+async def cmd_requests(reply_chat_id: str, actor_tg_id: str, db: AsyncSession) -> None:
     from app.models.inventory_request import InventoryRequest, RequestStatus
     from app.core.permissions import is_group_lead
 
     user_result = await db.execute(
         select(User)
-        .where(User.telegram_chat_id == chat_id, User.is_active == True)
+        .where(User.telegram_chat_id == actor_tg_id, User.is_active == True)
         .options(selectinload(User.role))
     )
     user = user_result.scalar_one_or_none()
     if not user:
-        await _send(chat_id, "❌ Account not linked. Use /link <token> first.")
+        await _send(reply_chat_id, _NOT_LINKED_MSG)
         return
 
     if not (user.role.can_approve_requests or user.role.can_manage_users):
-        await _send(chat_id, "❌ This command requires coordinator access.")
+        await _send(reply_chat_id, "❌ This command requires coordinator access.")
         return
 
     query = (
@@ -361,7 +432,7 @@ async def cmd_requests(chat_id: str, db: AsyncSession) -> None:
     requests = result.scalars().all()
 
     if not requests:
-        await _send(chat_id, "✅ No pending requests.")
+        await _send(reply_chat_id, "✅ No pending requests.")
         return
 
     lines = [f"<b>📋 Pending requests ({len(requests)}):</b>"]
@@ -373,32 +444,32 @@ async def cmd_requests(chat_id: str, db: AsyncSession) -> None:
         lines.append(f"• #{req.id} {target}{qty} by {requester}{reason}")
         lines.append(f"  /approve {req.id}  |  /deny {req.id}")
 
-    await _send(chat_id, "\n".join(lines))
+    await _send(reply_chat_id, "\n".join(lines))
 
 
-async def cmd_approve(chat_id: str, request_id_str: str, db: AsyncSession) -> None:
+async def cmd_approve(reply_chat_id: str, actor_tg_id: str, request_id_str: str, db: AsyncSession) -> None:
     from app.models.inventory_request import InventoryRequest, RequestStatus
     from app.services.request_service import approve_request
     from app.core.permissions import check_request_scope
 
     user_result = await db.execute(
         select(User)
-        .where(User.telegram_chat_id == chat_id, User.is_active == True)
+        .where(User.telegram_chat_id == actor_tg_id, User.is_active == True)
         .options(selectinload(User.role))
     )
     user = user_result.scalar_one_or_none()
     if not user:
-        await _send(chat_id, "❌ Account not linked.")
+        await _send(reply_chat_id, _NOT_LINKED_MSG)
         return
 
     if not (user.role.can_approve_requests or user.role.can_manage_users):
-        await _send(chat_id, "❌ Permission denied.")
+        await _send(reply_chat_id, "❌ Permission denied.")
         return
 
     try:
         request_id = int(request_id_str)
     except ValueError:
-        await _send(chat_id, "❌ Invalid request ID.")
+        await _send(reply_chat_id, "❌ Invalid request ID.")
         return
 
     # Group scope check — same rule as the web approve endpoint.
@@ -409,10 +480,10 @@ async def cmd_approve(chat_id: str, request_id_str: str, db: AsyncSession) -> No
         .where(InventoryRequest.id == request_id)
     )).first()
     if scope_row is None:
-        await _send(chat_id, f"❌ Request #{request_id} not found.")
+        await _send(reply_chat_id, f"❌ Request #{request_id} not found.")
         return
     if not check_request_scope(user, scope_row[0]):
-        await _send(chat_id, "❌ Permission denied: this request belongs to a different group.")
+        await _send(reply_chat_id, "❌ Permission denied: this request belongs to a different group.")
         return
 
     # Mutation — isolated from post-commit notifications.
@@ -420,12 +491,12 @@ async def cmd_approve(chat_id: str, request_id_str: str, db: AsyncSession) -> No
         req = await approve_request(db, request_id=request_id, approver_id=user.id, due_at=None)
         await db.commit()
     except Exception as e:
-        await _send(chat_id, f"❌ Error: {e}")
+        await _send(reply_chat_id, f"❌ Error: {e}")
         return
 
     # Commit succeeded — report and notify (non-fatal).
     target_name = f"Bin #{req.bin_id}" if req.bin_id else f"Item #{req.item_id}"
-    await _send(chat_id, f"✅ Request #{req.id} approved ({target_name}).")
+    await _send(reply_chat_id, f"✅ Request #{req.id} approved ({target_name}).")
 
     try:
         requester_result = await db.execute(select(User).where(User.id == req.requester_id))
@@ -440,29 +511,29 @@ async def cmd_approve(chat_id: str, request_id_str: str, db: AsyncSession) -> No
         log.warning("Failed to notify requester for request %d", req.id)
 
 
-async def cmd_deny(chat_id: str, request_id_str: str, reason: str | None, db: AsyncSession) -> None:
+async def cmd_deny(reply_chat_id: str, actor_tg_id: str, request_id_str: str, reason: str | None, db: AsyncSession) -> None:
     from app.services.request_service import deny_request
     from app.models.inventory_request import InventoryRequest
     from app.core.permissions import check_request_scope
 
     user_result = await db.execute(
         select(User)
-        .where(User.telegram_chat_id == chat_id, User.is_active == True)
+        .where(User.telegram_chat_id == actor_tg_id, User.is_active == True)
         .options(selectinload(User.role))
     )
     user = user_result.scalar_one_or_none()
     if not user:
-        await _send(chat_id, "❌ Account not linked.")
+        await _send(reply_chat_id, _NOT_LINKED_MSG)
         return
 
     if not (user.role.can_approve_requests or user.role.can_manage_users):
-        await _send(chat_id, "❌ Permission denied.")
+        await _send(reply_chat_id, "❌ Permission denied.")
         return
 
     try:
         request_id = int(request_id_str)
     except ValueError:
-        await _send(chat_id, "❌ Invalid request ID.")
+        await _send(reply_chat_id, "❌ Invalid request ID.")
         return
 
     # Group scope check — same rule as the web deny endpoint.
@@ -473,10 +544,10 @@ async def cmd_deny(chat_id: str, request_id_str: str, reason: str | None, db: As
         .where(InventoryRequest.id == request_id)
     )).first()
     if scope_row is None:
-        await _send(chat_id, f"❌ Request #{request_id} not found.")
+        await _send(reply_chat_id, f"❌ Request #{request_id} not found.")
         return
     if not check_request_scope(user, scope_row[0]):
-        await _send(chat_id, "❌ Permission denied: this request belongs to a different group.")
+        await _send(reply_chat_id, "❌ Permission denied: this request belongs to a different group.")
         return
 
     # Mutation — isolated from post-commit notifications.
@@ -486,11 +557,11 @@ async def cmd_deny(chat_id: str, request_id_str: str, reason: str | None, db: As
         )
         await db.commit()
     except Exception as e:
-        await _send(chat_id, f"❌ Error: {e}")
+        await _send(reply_chat_id, f"❌ Error: {e}")
         return
 
     # Commit succeeded — report and notify (non-fatal).
-    await _send(chat_id, f"❌ Request #{req.id} denied.")
+    await _send(reply_chat_id, f"❌ Request #{req.id} denied.")
 
     try:
         requester_result = await db.execute(select(User).where(User.id == req.requester_id))

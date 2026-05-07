@@ -665,7 +665,7 @@ async def test_telegram_approve_own_group(db: AsyncSession):
     await db.refresh(req)
 
     from app.bot.handlers import cmd_approve
-    await cmd_approve("gl1_tg", str(req.id), db)
+    await cmd_approve("gl1_tg", "gl1_tg", str(req.id), db)
 
     await db.refresh(req)
     assert req.status == "FULFILLED"
@@ -688,7 +688,7 @@ async def test_telegram_approve_cross_group_rejected(db: AsyncSession):
     await db.refresh(req)
 
     from app.bot.handlers import cmd_approve
-    await cmd_approve("gl1_tg_x", str(req.id), db)
+    await cmd_approve("gl1_tg_x", "gl1_tg_x", str(req.id), db)
 
     # Request must remain PENDING — no mutation.
     await db.refresh(req)
@@ -711,7 +711,7 @@ async def test_telegram_deny_cross_group_rejected(db: AsyncSession):
     await db.refresh(req)
 
     from app.bot.handlers import cmd_deny
-    await cmd_deny("gl1_tg_d", str(req.id), "nope", db)
+    await cmd_deny("gl1_tg_d", "gl1_tg_d", str(req.id), "nope", db)
 
     await db.refresh(req)
     assert req.status == "PENDING"
@@ -744,7 +744,7 @@ async def test_telegram_requests_filters_by_group(db: AsyncSession):
 
     from app.bot import handlers as h
     with patch.object(h, "_send", side_effect=capture_send):
-        await h.cmd_requests("gl1_tg_list", db)
+        await h.cmd_requests("gl1_tg_list", "gl1_tg_list", db)
 
     combined = "\n".join(sent)
     assert f"#{req1.id}" in combined, "gl1 should see user1's request (same group)"
