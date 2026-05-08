@@ -14,6 +14,23 @@ Telegram calls are made via `python-telegram-bot` v21 (async).
 
 ## Commands
 
+### Checklist commands
+
+| Command | Who can use | Description |
+|---|---|---|
+| `/tasks` | Linked users | Current week's task list for your group (or the topic's group) |
+| `/mytasks` | Linked users | Tasks assigned to you or to everyone in your group |
+| `/task <id>` | Linked users | Read-only task details; never modifies DB state |
+| `/done <id> [note]` | Assigned users, coordinators | Mark a task complete; note stored in completion_notes |
+| `/undo <id> [reason]` | Coordinators, group leads, task completer | Mark a task incomplete again |
+| `/claim <id>` | Coordinators, assigned group leads | Assign the task to yourself |
+| `/unclaim <id>` | Task assignee, coordinators, assigned group leads | Remove your assignment |
+| `/assign <id> me` | Coordinators, assigned group leads | Same as /claim |
+| `/assign <id> everyone` | Coordinators, assigned group leads | Set task to shared (everyone) responsibility |
+| `/assign <id> @username` | Coordinators, assigned group leads | Assign to a linked Telegram user; DMs them |
+
+### Inventory commands
+
 | Command | Who can use | Description |
 |---|---|---|
 | `/start` | Anyone | Shows help and command list |
@@ -80,7 +97,7 @@ Telegram forum topics do **not** have their own chat IDs. A topic message uses t
 | `TELEGRAM_WEBHOOK_SECRET` | Random secret in the webhook URL |
 | `TELEGRAM_COORDINATOR_CHAT_ID` | Supergroup chat ID for coordinator alerts (e.g. `-100xxxxxxxxxx`) |
 | `TELEGRAM_GROUP_TOPIC_THREAD_IDS` | JSON mapping of group name → `message_thread_id` |
-| `APP_TIMEZONE` | Reserved for upcoming scheduled reminder/checklist jobs (default: `America/Chicago`). **Not yet wired into the scheduler** — existing jobs run in server time. Will be applied in a future prompt. |
+| `APP_TIMEZONE` | Timezone for display; Sunday scheduler jobs run at `America/Chicago` (hardcoded). |
 
 **TELEGRAM_GROUP_TOPIC_THREAD_IDS example:**
 ```
@@ -184,9 +201,61 @@ Both handlers only process photos sent in the coordinator channel.
 
 **Polling** is easier for local development. See `docs/local-dev.md` for the ngrok-based local webhook setup.
 
+## Scheduled Sunday messages
+
+Two APScheduler cron jobs (timezone: `America/Chicago`) run automatically:
+
+| Job | Time | What it sends |
+|---|---|---|
+| `sunday_checklist_morning` | Sunday 9:00 AM Central | Full current-week task list for each group |
+| `sunday_checklist_reminder` | Sunday 7:00 PM Central | Incomplete tasks only; also DMs users with specifically-assigned incomplete tasks |
+
+Both jobs send to each group's coordinator topic thread (via `TELEGRAM_GROUP_TOPIC_THREAD_IDS`), falling back to the coordinator chat without a thread if a group is not mapped. Neither job creates a new weekly checklist — that is the Monday 6:00 AM job's responsibility.
+
+**Sunday evening DM rule:** Only users with a non-null `assignee_id` on an incomplete task receive a DM. Tasks with `assignee_id IS NULL` (everyone tasks) do not trigger individual DMs.
+
+## Command examples
+
+```
+/tasks                        — group 1 task list (or detected from topic)
+/mytasks                      — your tasks + everyone tasks
+/task 104                     — details for task #104
+/done 104 tables are set up   — mark task 104 complete with note
+/undo 104 forgot one table    — mark task 104 incomplete
+/claim 104                    — assign task 104 to yourself
+/unclaim 104                  — remove your claim on task 104
+/assign 104 me                — same as /claim
+/assign 104 everyone          — set task 104 to shared responsibility
+/assign 104 @raj              — assign task 104 to linked user @raj
+/requests                     — list pending requests
+/approve 12                   — approve request #12
+/deny 12 not enough stock     — deny request #12 with reason
+/whereami                     — show chat_id and thread IDs for setup
+```
+
+## Manual QA checklist
+
+1. DM bot with `/start`
+2. DM bot with `/link <token>` (get token from Settings → Link Telegram)
+3. Run `/whereami` in each group topic; copy the `message_thread_id` values
+4. Set `TELEGRAM_GROUP_TOPIC_THREAD_IDS` env var and restart backend
+5. Run `/tasks` in a Group 1 topic — verify Group 1 task list appears in that topic
+6. Run `/mytasks` as a linked user — verify your assigned + everyone tasks appear
+7. View a task with `/task <id>` — verify read-only details; check DB unchanged
+8. Claim a task with `/claim <id>` — verify website shows your name as assignee
+9. Mark task done with `/done <id> <note>` — verify website shows complete + note
+10. Undo with `/undo <id>` — verify website shows incomplete again
+11. Assign to everyone with `/assign <id> everyone` — verify website shows no assignee
+12. Assign to `@username` with `/assign <id> @raj` — verify website shows Raj; confirm Raj receives DM
+13. Try to manually complete an auto-generated return task — confirm it is blocked
+14. Test `/approve <id>` and `/deny <id>` from Telegram — confirm website request page updates
+15. Trigger a checkout and return — confirm personal DMs still arrive for those events
+16. Wait until Sunday or trigger `_run_sunday_checklist_morning()` manually — confirm group messages sent
+
 ## Adding New Commands
 
 1. Add a handler function in `app/bot/handlers.py` with signature `async def cmd_xxx(ctx: BotContext, db: AsyncSession) -> None`
 2. Register it in the `handle_update()` dispatch block
 3. Use `await _send(ctx.reply_chat_id, text, message_thread_id=ctx.message_thread_id)` so replies stay in the correct topic
-4. Add the command to BotFather via `/setcommands`
+4. For long messages, use `await _send_chunks(ctx.reply_chat_id, text, message_thread_id=ctx.message_thread_id)`
+5. Add the command to BotFather via `/setcommands`

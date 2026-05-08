@@ -24,14 +24,16 @@ Identity contract:
 import html as _html
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
+from app.models.checklist import Checklist, ChecklistItem, GroupName
 from app.models.receipt_record import ReceiptRecord
 from app.models.transaction import Transaction, TransactionStatus
 from app.models.transaction_photo import TransactionPhoto
@@ -127,6 +129,25 @@ async def handle_update(body: dict[str, Any], db: AsyncSession) -> None:
     elif ctx.command == "/deny" and ctx.args:
         reason = " ".join(ctx.args[1:]) if len(ctx.args) > 1 else None
         await cmd_deny(ctx, ctx.args[0], reason, db)
+    # ── Checklist commands ──────────────────────────────────────────────────
+    elif ctx.command == "/tasks":
+        await cmd_tasks(ctx, db)
+    elif ctx.command == "/mytasks":
+        await cmd_mytasks(ctx, db)
+    elif ctx.command == "/task" and ctx.args:
+        await cmd_task(ctx, ctx.args[0], db)
+    elif ctx.command == "/done" and ctx.args:
+        note = " ".join(ctx.args[1:]) if len(ctx.args) > 1 else None
+        await cmd_done(ctx, ctx.args[0], note, db)
+    elif ctx.command == "/undo" and ctx.args:
+        reason = " ".join(ctx.args[1:]) if len(ctx.args) > 1 else None
+        await cmd_undo(ctx, ctx.args[0], reason, db)
+    elif ctx.command == "/claim" and ctx.args:
+        await cmd_claim(ctx, ctx.args[0], db)
+    elif ctx.command == "/unclaim" and ctx.args:
+        await cmd_unclaim(ctx, ctx.args[0], db)
+    elif ctx.command == "/assign" and len(ctx.args) >= 2:
+        await cmd_assign(ctx, ctx.args[0], ctx.args[1], db)
     else:
         await _send(
             ctx.reply_chat_id,
@@ -258,6 +279,13 @@ async def handle_receipt_photo_reply(
     return True
 
 
+async def _send_chunks(chat_id: str, text: str, *, message_thread_id: Optional[int] = None) -> None:
+    """Send a potentially long message split into Telegram-safe chunks."""
+    from app.bot.checklist_helpers import split_messages
+    for chunk in split_messages(text):
+        await _send(chat_id, chunk, message_thread_id=message_thread_id)
+
+
 async def _send(chat_id: str, text: str, *, message_thread_id: Optional[int] = None) -> None:
     bot = get_bot()
     if not bot:
@@ -274,17 +302,26 @@ async def _send(chat_id: str, text: str, *, message_thread_id: Optional[int] = N
 async def cmd_start(ctx: BotContext) -> None:
     text = (
         "👋 <b>Cabinet Inventory Bot</b>\n\n"
-        "Commands:\n"
-        "/link &lt;token&gt; — Link your account (DM only)\n"
-        "/myitems — Your checked-out items\n"
-        "/overdue — Overdue checkouts (coordinators)\n"
-        "/status &lt;item name&gt; — Check item availability\n"
-        "/requests — Pending requests (coordinators)\n"
-        "/approve &lt;id&gt; — Approve a request\n"
-        "/deny &lt;id&gt; [reason] — Deny a request\n"
-        "/whoami — Show your linked account info\n"
-        "/whereami — Show this chat's IDs (for setup)\n"
-        "/help — Show this command list\n\n"
+        "<b>Checklist:</b>\n"
+        "  /tasks — Current week's task list\n"
+        "  /mytasks — Tasks assigned to you\n"
+        "  /task &lt;id&gt; — Task details\n"
+        "  /done &lt;id&gt; [note] — Mark task complete\n"
+        "  /undo &lt;id&gt; [reason] — Mark task incomplete\n"
+        "  /claim &lt;id&gt; — Claim a task\n"
+        "  /unclaim &lt;id&gt; — Unclaim a task\n"
+        "  /assign &lt;id&gt; me|everyone|@username — Assign task\n\n"
+        "<b>Inventory:</b>\n"
+        "  /link &lt;token&gt; — Link your account (DM only)\n"
+        "  /myitems — Your checked-out items\n"
+        "  /overdue — Overdue checkouts (coordinators)\n"
+        "  /status &lt;item name&gt; — Check item availability\n"
+        "  /requests — Pending requests (coordinators)\n"
+        "  /approve &lt;id&gt; — Approve a request\n"
+        "  /deny &lt;id&gt; [reason] — Deny a request\n"
+        "  /whoami — Show your linked account info\n"
+        "  /whereami — Show this chat's IDs (for setup)\n"
+        "  /help — Show this command list\n\n"
         "Get your link token from the web app under Settings → Link Telegram."
     )
     await _send(ctx.reply_chat_id, text, message_thread_id=ctx.message_thread_id)
@@ -293,7 +330,19 @@ async def cmd_start(ctx: BotContext) -> None:
 async def cmd_help(ctx: BotContext) -> None:
     text = (
         "<b>Cabinet Inventory Bot — Commands</b>\n\n"
-        "<b>Everyone:</b>\n"
+        "<b>Checklist (all linked users):</b>\n"
+        "  /tasks — Current week's task list for your group\n"
+        "  /mytasks — Tasks assigned to you or everyone\n"
+        "  /task &lt;id&gt; — Read-only task details\n"
+        "  /done &lt;id&gt; [note] — Mark a task complete\n"
+        "  /undo &lt;id&gt; [reason] — Mark a task incomplete again\n\n"
+        "<b>Checklist (coordinators / group leads):</b>\n"
+        "  /claim &lt;id&gt; — Assign task to yourself\n"
+        "  /unclaim &lt;id&gt; — Remove your assignment\n"
+        "  /assign &lt;id&gt; me — Same as /claim\n"
+        "  /assign &lt;id&gt; everyone — Set task to shared responsibility\n"
+        "  /assign &lt;id&gt; @username — Assign to a linked user\n\n"
+        "<b>Inventory (all linked users):</b>\n"
         "  /link &lt;token&gt; — Link Telegram to your account (DM only)\n"
         "  /myitems — Your currently checked-out items\n"
         "  /status &lt;item&gt; — Check item availability\n"
@@ -738,3 +787,545 @@ async def cmd_deny(ctx: BotContext, request_id_str: str, reason: Optional[str], 
             await notify_request_denied(requester.telegram_chat_id, target_name, req.id, reason)
     except Exception:
         log.warning("Failed to notify requester for request %d", req.id)
+
+
+# ─── Checklist commands ───────────────────────────────────────────────────────
+
+
+async def _resolve_actor(ctx: BotContext, db: AsyncSession):
+    """Look up the linked User for this Telegram actor. Returns None if not linked."""
+    result = await db.execute(
+        select(User)
+        .where(User.telegram_chat_id == ctx.actor_telegram_id, User.is_active == True)
+        .options(selectinload(User.role))
+    )
+    return result.scalar_one_or_none()
+
+
+async def _load_task_with_checklist(task_id: int, db: AsyncSession):
+    """Load a ChecklistItem with its checklist and assignments for permission checks."""
+    result = await db.execute(
+        select(ChecklistItem)
+        .where(ChecklistItem.id == task_id)
+        .options(
+            selectinload(ChecklistItem.assignee),
+            selectinload(ChecklistItem.completed_by),
+            selectinload(ChecklistItem.subchecklist),
+            selectinload(ChecklistItem.checklist).selectinload(Checklist.assignments),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def cmd_tasks(ctx: BotContext, db: AsyncSession) -> None:
+    """Show the current week's task list for the relevant group."""
+    from app.bot.checklist_helpers import (
+        can_view_checklist, format_full_checklist, load_checklist_for_group,
+    )
+    from app.services.telegram_service import get_group_for_thread_id
+
+    user = await _resolve_actor(ctx, db)
+
+    # Determine group: topic mapping > explicit arg (admins) > user's own group
+    group_name: Optional[str] = None
+
+    if ctx.message_thread_id is not None:
+        group_name = get_group_for_thread_id(ctx.message_thread_id)
+
+    if not group_name and ctx.args and user:
+        can_manage = user.role.can_manage_users or user.role.can_manage_inventory
+        if can_manage:
+            arg = ctx.args[0].upper()
+            if arg in GroupName.ALL:
+                group_name = arg
+
+    if not group_name:
+        if not user:
+            await _send(ctx.reply_chat_id, _NOT_LINKED_MSG, message_thread_id=ctx.message_thread_id)
+            return
+        if not user.group_name:
+            await _send(ctx.reply_chat_id, "❌ Your account has no group assigned. Contact an admin.", message_thread_id=ctx.message_thread_id)
+            return
+        group_name = user.group_name
+
+    if not user:
+        await _send(ctx.reply_chat_id, _NOT_LINKED_MSG, message_thread_id=ctx.message_thread_id)
+        return
+
+    checklist = await load_checklist_for_group(db, group_name)
+    if not checklist:
+        await _send(ctx.reply_chat_id, "📋 No checklist found for this week yet.", message_thread_id=ctx.message_thread_id)
+        return
+
+    if not can_view_checklist(user, checklist):
+        await _send(ctx.reply_chat_id, "❌ You don't have access to this group's checklist.", message_thread_id=ctx.message_thread_id)
+        return
+
+    await _send_chunks(ctx.reply_chat_id, format_full_checklist(checklist), message_thread_id=ctx.message_thread_id)
+
+
+async def cmd_mytasks(ctx: BotContext, db: AsyncSession) -> None:
+    """Show tasks assigned to the actor or everyone tasks for their group."""
+    from app.bot.checklist_helpers import format_task_line, load_checklist_for_group, split_messages
+
+    user = await _resolve_actor(ctx, db)
+    if not user:
+        await _send(ctx.reply_chat_id, _NOT_LINKED_MSG, message_thread_id=ctx.message_thread_id)
+        return
+
+    if not user.group_name:
+        await _send(ctx.reply_chat_id, "❌ Your account has no group assigned. Contact an admin.", message_thread_id=ctx.message_thread_id)
+        return
+
+    checklist = await load_checklist_for_group(db, user.group_name)
+    if not checklist:
+        await _send(ctx.reply_chat_id, "📋 No checklist found for this week.", message_thread_id=ctx.message_thread_id)
+        return
+
+    my_tasks = [
+        t for t in sorted(checklist.items, key=lambda t: t.item_order)
+        if t.assignee_id == user.id or t.assignee_id is None
+    ]
+
+    if not my_tasks:
+        await _send(ctx.reply_chat_id, "✅ No tasks assigned to you this week.", message_thread_id=ctx.message_thread_id)
+        return
+
+    incomplete = [t for t in my_tasks if not t.is_completed]
+    complete = [t for t in my_tasks if t.is_completed]
+
+    group_display = GroupName.DISPLAY.get(user.group_name, user.group_name)
+    lines = [f"<b>📋 My tasks — {_html.escape(group_display)}</b>"]
+
+    if incomplete:
+        lines.append("\n<b>To do:</b>")
+        for task in incomplete:
+            lines.append(f"  {format_task_line(task)}")
+
+    if complete:
+        lines.append("\n<b>Done:</b>")
+        for task in complete:
+            lines.append(f"  {format_task_line(task)}")
+
+    await _send_chunks(ctx.reply_chat_id, "\n".join(lines), message_thread_id=ctx.message_thread_id)
+
+
+async def cmd_task(ctx: BotContext, task_id_str: str, db: AsyncSession) -> None:
+    """Show read-only task details. Never modifies DB state."""
+    from app.bot.checklist_helpers import can_view_checklist
+
+    user = await _resolve_actor(ctx, db)
+    if not user:
+        await _send(ctx.reply_chat_id, _NOT_LINKED_MSG, message_thread_id=ctx.message_thread_id)
+        return
+
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        await _send(ctx.reply_chat_id, "❌ Invalid task ID.", message_thread_id=ctx.message_thread_id)
+        return
+
+    task = await _load_task_with_checklist(task_id, db)
+    if not task:
+        await _send(ctx.reply_chat_id, f"❌ Task #{task_id} not found.", message_thread_id=ctx.message_thread_id)
+        return
+
+    if not can_view_checklist(user, task.checklist):
+        await _send(ctx.reply_chat_id, "❌ You don't have access to this task.", message_thread_id=ctx.message_thread_id)
+        return
+
+    group_display = GroupName.DISPLAY.get(task.checklist.group_name, task.checklist.group_name)
+    section = task.subchecklist.title if task.subchecklist else "Unsectioned"
+    status_str = "✅ Done" if task.is_completed else "⬜ Incomplete"
+
+    if task.assignee_id is not None:
+        assignee_str = _html.escape(task.assignee.full_name) if task.assignee else "unknown"
+    else:
+        assignee_str = "everyone"
+
+    lines = [
+        f"<b>Task #{task.id}</b>",
+        f"<b>{_html.escape(task.title)}</b>",
+        f"Group: {_html.escape(group_display)}",
+        f"Section: {_html.escape(section)}",
+        f"Assigned: {assignee_str}",
+        f"Status: {status_str}",
+    ]
+
+    if task.is_completed:
+        if task.completed_by:
+            lines.append(f"Completed by: {_html.escape(task.completed_by.full_name)}")
+        if task.completion_notes:
+            lines.append(f"Notes: {_html.escape(task.completion_notes)}")
+
+    if task.description:
+        lines.append(f"Description: {_html.escape(task.description)}")
+
+    if task.is_auto_generated:
+        lines.append("<i>Auto-generated return task</i>")
+
+    lines.append("")
+    lines.append("<b>Suggested commands:</b>")
+    if not task.is_completed and not (task.is_auto_generated and task.auto_type in ("ITEM_RETURN", "BIN_RETURN")):
+        lines.append(f"/done {task.id}  — mark complete")
+        lines.append(f"/claim {task.id}  — claim this task")
+        lines.append(f"/assign {task.id} me  — assign to yourself")
+    elif task.is_completed:
+        lines.append(f"/undo {task.id}  — mark incomplete")
+
+    await _send(ctx.reply_chat_id, "\n".join(lines), message_thread_id=ctx.message_thread_id)
+
+
+async def cmd_done(ctx: BotContext, task_id_str: str, note: Optional[str], db: AsyncSession) -> None:
+    """Mark a checklist task complete. Mirrors website complete_item permission rules."""
+    from app.bot.checklist_helpers import can_view_checklist, can_complete_on
+    from app.services.checklist_service import complete_checklist_item
+
+    user = await _resolve_actor(ctx, db)
+    if not user:
+        await _send(ctx.reply_chat_id, _NOT_LINKED_MSG, message_thread_id=ctx.message_thread_id)
+        return
+
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        await _send(ctx.reply_chat_id, "❌ Invalid task ID.", message_thread_id=ctx.message_thread_id)
+        return
+
+    task = await _load_task_with_checklist(task_id, db)
+    if not task:
+        await _send(ctx.reply_chat_id, f"❌ Task #{task_id} not found.", message_thread_id=ctx.message_thread_id)
+        return
+
+    if not can_view_checklist(user, task.checklist):
+        await _send(ctx.reply_chat_id, "❌ You don't have access to this task.", message_thread_id=ctx.message_thread_id)
+        return
+
+    # Block auto-generated ITEM_RETURN/BIN_RETURN — same as website 409 rule
+    if task.is_auto_generated and task.auto_type in ("ITEM_RETURN", "BIN_RETURN") and not task.is_completed:
+        await _send(
+            ctx.reply_chat_id,
+            "❌ This is an auto-generated return task. "
+            "Return the item through the checkout return flow — it will complete automatically.",
+            message_thread_id=ctx.message_thread_id,
+        )
+        return
+
+    if not can_complete_on(user, task.checklist):
+        await _send(
+            ctx.reply_chat_id,
+            "❌ You must be assigned to this checklist to mark tasks done.",
+            message_thread_id=ctx.message_thread_id,
+        )
+        return
+
+    if task.is_completed:
+        await _send(ctx.reply_chat_id, f"✅ Task #{task_id} is already complete.", message_thread_id=ctx.message_thread_id)
+        return
+
+    try:
+        await complete_checklist_item(db, item_id=task_id, user_id=user.id, notes=note)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("cmd_done: error completing task %d", task_id)
+        await _send(ctx.reply_chat_id, "❌ Could not mark task complete. Please try again.", message_thread_id=ctx.message_thread_id)
+        return
+
+    note_str = f" — {_html.escape(note)}" if note else ""
+    await _send(ctx.reply_chat_id, f"✅ Task #{task_id} marked complete{note_str}.", message_thread_id=ctx.message_thread_id)
+
+
+async def cmd_undo(ctx: BotContext, task_id_str: str, reason: Optional[str], db: AsyncSession) -> None:
+    """Mark a checklist task incomplete again."""
+    from app.bot.checklist_helpers import can_view_checklist
+
+    user = await _resolve_actor(ctx, db)
+    if not user:
+        await _send(ctx.reply_chat_id, _NOT_LINKED_MSG, message_thread_id=ctx.message_thread_id)
+        return
+
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        await _send(ctx.reply_chat_id, "❌ Invalid task ID.", message_thread_id=ctx.message_thread_id)
+        return
+
+    task = await _load_task_with_checklist(task_id, db)
+    if not task:
+        await _send(ctx.reply_chat_id, f"❌ Task #{task_id} not found.", message_thread_id=ctx.message_thread_id)
+        return
+
+    if not can_view_checklist(user, task.checklist):
+        await _send(ctx.reply_chat_id, "❌ You don't have access to this task.", message_thread_id=ctx.message_thread_id)
+        return
+
+    # Auto-generated return tasks cannot be undone from Telegram regardless of role
+    if task.is_auto_generated and task.auto_type in ("ITEM_RETURN", "BIN_RETURN"):
+        await _send(
+            ctx.reply_chat_id,
+            "❌ Auto-generated return tasks cannot be undone from Telegram. "
+            "Process the return flow on the website.",
+            message_thread_id=ctx.message_thread_id,
+        )
+        return
+
+    if not task.is_completed:
+        await _send(ctx.reply_chat_id, f"⬜ Task #{task_id} is already incomplete.", message_thread_id=ctx.message_thread_id)
+        return
+
+    # Permission: admin/coordinator, group lead on this checklist, or the user who completed it
+    can_manage = user.role.can_manage_users or user.role.can_manage_inventory
+    checklist = task.checklist
+    is_group_lead_here = (
+        user.role.can_approve_requests
+        and any(a.user_id == user.id for a in checklist.assignments)
+        and user.group_name == checklist.group_name
+    )
+    is_own_completion = task.completed_by_user_id == user.id
+
+    if not can_manage and not is_group_lead_here and not is_own_completion:
+        await _send(
+            ctx.reply_chat_id,
+            "❌ Permission denied. You can undo tasks you completed yourself, or contact a coordinator.",
+            message_thread_id=ctx.message_thread_id,
+        )
+        return
+
+    try:
+        task.is_completed = False
+        task.completed_at = None
+        task.completed_by_user_id = None
+        if reason:
+            task.completion_notes = (task.completion_notes or "") + f"\n[Undone via Telegram: {_html.escape(reason)}]"
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("cmd_undo: error undoing task %d", task_id)
+        await _send(ctx.reply_chat_id, "❌ Could not undo task. Please try again.", message_thread_id=ctx.message_thread_id)
+        return
+
+    await _send(ctx.reply_chat_id, f"↩️ Task #{task_id} marked incomplete.", message_thread_id=ctx.message_thread_id)
+
+
+async def cmd_claim(ctx: BotContext, task_id_str: str, db: AsyncSession) -> None:
+    """Assign this task to the actor. Requires manage-tasks permission."""
+    from app.bot.checklist_helpers import can_view_checklist, can_manage_tasks_on
+
+    user = await _resolve_actor(ctx, db)
+    if not user:
+        await _send(ctx.reply_chat_id, _NOT_LINKED_MSG, message_thread_id=ctx.message_thread_id)
+        return
+
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        await _send(ctx.reply_chat_id, "❌ Invalid task ID.", message_thread_id=ctx.message_thread_id)
+        return
+
+    task = await _load_task_with_checklist(task_id, db)
+    if not task:
+        await _send(ctx.reply_chat_id, f"❌ Task #{task_id} not found.", message_thread_id=ctx.message_thread_id)
+        return
+
+    if not can_view_checklist(user, task.checklist):
+        await _send(ctx.reply_chat_id, "❌ You don't have access to this task.", message_thread_id=ctx.message_thread_id)
+        return
+
+    if not can_manage_tasks_on(user, task.checklist):
+        await _send(
+            ctx.reply_chat_id,
+            "❌ Only coordinators and assigned group leads can claim tasks.",
+            message_thread_id=ctx.message_thread_id,
+        )
+        return
+
+    if task.assignee_id == user.id:
+        await _send(ctx.reply_chat_id, f"✅ Task #{task_id} is already assigned to you.", message_thread_id=ctx.message_thread_id)
+        return
+
+    try:
+        task.assignee_id = user.id
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("cmd_claim: error claiming task %d", task_id)
+        await _send(ctx.reply_chat_id, "❌ Could not claim task. Please try again.", message_thread_id=ctx.message_thread_id)
+        return
+
+    await _send(ctx.reply_chat_id, f"✅ Task #{task_id} claimed — assigned to you.", message_thread_id=ctx.message_thread_id)
+
+
+async def cmd_unclaim(ctx: BotContext, task_id_str: str, db: AsyncSession) -> None:
+    """Remove the current assignee from a task."""
+    from app.bot.checklist_helpers import can_view_checklist, can_manage_tasks_on
+
+    user = await _resolve_actor(ctx, db)
+    if not user:
+        await _send(ctx.reply_chat_id, _NOT_LINKED_MSG, message_thread_id=ctx.message_thread_id)
+        return
+
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        await _send(ctx.reply_chat_id, "❌ Invalid task ID.", message_thread_id=ctx.message_thread_id)
+        return
+
+    task = await _load_task_with_checklist(task_id, db)
+    if not task:
+        await _send(ctx.reply_chat_id, f"❌ Task #{task_id} not found.", message_thread_id=ctx.message_thread_id)
+        return
+
+    if not can_view_checklist(user, task.checklist):
+        await _send(ctx.reply_chat_id, "❌ You don't have access to this task.", message_thread_id=ctx.message_thread_id)
+        return
+
+    if task.assignee_id is None:
+        await _send(ctx.reply_chat_id, f"⬜ Task #{task_id} has no specific assignee.", message_thread_id=ctx.message_thread_id)
+        return
+
+    # Allow: admin/coordinator, group lead on this checklist, or the current assignee
+    is_assignee = task.assignee_id == user.id
+    if not can_manage_tasks_on(user, task.checklist) and not is_assignee:
+        await _send(
+            ctx.reply_chat_id,
+            "❌ You can only unclaim tasks assigned to you.",
+            message_thread_id=ctx.message_thread_id,
+        )
+        return
+
+    try:
+        task.assignee_id = None
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("cmd_unclaim: error unclaiming task %d", task_id)
+        await _send(ctx.reply_chat_id, "❌ Could not unclaim task. Please try again.", message_thread_id=ctx.message_thread_id)
+        return
+
+    await _send(ctx.reply_chat_id, f"✅ Task #{task_id} unassigned — open for everyone.", message_thread_id=ctx.message_thread_id)
+
+
+async def cmd_assign(ctx: BotContext, task_id_str: str, target: str, db: AsyncSession) -> None:
+    """Assign a task: /assign <id> me|everyone|@username"""
+    from app.bot.checklist_helpers import can_view_checklist, can_manage_tasks_on
+    from app.services.telegram_service import send_user_dm
+
+    user = await _resolve_actor(ctx, db)
+    if not user:
+        await _send(ctx.reply_chat_id, _NOT_LINKED_MSG, message_thread_id=ctx.message_thread_id)
+        return
+
+    try:
+        task_id = int(task_id_str)
+    except ValueError:
+        await _send(ctx.reply_chat_id, "❌ Invalid task ID.", message_thread_id=ctx.message_thread_id)
+        return
+
+    task = await _load_task_with_checklist(task_id, db)
+    if not task:
+        await _send(ctx.reply_chat_id, f"❌ Task #{task_id} not found.", message_thread_id=ctx.message_thread_id)
+        return
+
+    if not can_view_checklist(user, task.checklist):
+        await _send(ctx.reply_chat_id, "❌ You don't have access to this task.", message_thread_id=ctx.message_thread_id)
+        return
+
+    if not can_manage_tasks_on(user, task.checklist):
+        await _send(
+            ctx.reply_chat_id,
+            "❌ Only coordinators and assigned group leads can assign tasks.",
+            message_thread_id=ctx.message_thread_id,
+        )
+        return
+
+    target_lower = target.lower()
+    dm_user = None
+
+    if target_lower == "me":
+        task.assignee_id = user.id
+        assignee_display = "you"
+
+    elif target_lower == "everyone":
+        task.assignee_id = None
+        assignee_display = "everyone"
+
+    elif target.startswith("@"):
+        handle = target.lstrip("@")
+        tgt_result = await db.execute(
+            select(User).where(
+                func.lower(User.telegram_handle) == handle.lower(),
+                User.is_active == True,
+            )
+        )
+        target_user = tgt_result.scalar_one_or_none()
+        if not target_user:
+            await _send(
+                ctx.reply_chat_id,
+                f"❌ I couldn't find a linked user for @{_html.escape(handle)}. "
+                "Ask them to DM me /start and link their account first.",
+                message_thread_id=ctx.message_thread_id,
+            )
+            return
+        # Require Telegram linkage — the point of @username assignment is to DM them
+        if not target_user.telegram_chat_id:
+            await _send(
+                ctx.reply_chat_id,
+                f"❌ @{_html.escape(handle)} has not linked Telegram yet. "
+                "Ask them to DM me /start and link their account first.",
+                message_thread_id=ctx.message_thread_id,
+            )
+            return
+        # Non-managers (group leads) may only assign users already on this checklist
+        # (mirrors website PATCH /{checklist_id}/items/{item_id} eligibility rule)
+        if not (user.role.can_manage_users or user.role.can_manage_inventory):
+            if not any(a.user_id == target_user.id for a in task.checklist.assignments):
+                await _send(
+                    ctx.reply_chat_id,
+                    "❌ You can only assign this task to users eligible for this checklist.",
+                    message_thread_id=ctx.message_thread_id,
+                )
+                return
+        task.assignee_id = target_user.id
+        assignee_display = _html.escape(target_user.full_name)
+        dm_user = target_user
+
+    else:
+        await _send(
+            ctx.reply_chat_id,
+            "❌ Invalid target. Use: /assign &lt;id&gt; me|everyone|@username",
+            message_thread_id=ctx.message_thread_id,
+        )
+        return
+
+    # Capture title before commit flushes the session
+    task_title = task.title
+    checklist_group = task.checklist.group_name
+
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("cmd_assign: error assigning task %d", task_id)
+        await _send(ctx.reply_chat_id, "❌ Could not assign task. Please try again.", message_thread_id=ctx.message_thread_id)
+        return
+
+    await _send(
+        ctx.reply_chat_id,
+        f"✅ Task #{task_id} assigned to {assignee_display}.",
+        message_thread_id=ctx.message_thread_id,
+    )
+
+    # DM the assigned user (fire-and-forget — must not rollback the assignment)
+    if dm_user:
+        try:
+            group_display = GroupName.DISPLAY.get(checklist_group, checklist_group)
+            dm_text = (
+                f"📋 <b>Task assigned to you</b>\n"
+                f"Task #{task_id}: <b>{_html.escape(task_title)}</b>\n"
+                f"Group: {_html.escape(group_display)}\n\n"
+                f"View details: /task {task_id}"
+            )
+            await send_user_dm(dm_user, dm_text)
+        except Exception:
+            log.warning("cmd_assign: failed to DM assigned user %d for task %d", dm_user.id, task_id)

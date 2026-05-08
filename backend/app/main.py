@@ -76,6 +76,34 @@ async def _run_weekly_checklist_generation() -> None:
         log.info("Weekly checklist generation: %d checklists ensured", len(checklists))
 
 
+async def _run_sunday_checklist_morning() -> None:
+    """Send the full weekly task list to each group's topic on Sunday morning."""
+    from app.bot.checklist_helpers import send_sunday_morning_for_group
+    from app.models.checklist import GroupName
+
+    log.info("Sunday morning scheduler: sending weekly checklists")
+    for group in GroupName.ALL:
+        try:
+            async with AsyncSessionLocal() as db:
+                await send_sunday_morning_for_group(group, db)
+        except Exception:
+            log.exception("Sunday morning scheduler: group %s failed", group)
+
+
+async def _run_sunday_evening_reminder() -> None:
+    """Send incomplete task reminders to each group and DM assigned users Sunday evening."""
+    from app.bot.checklist_helpers import send_sunday_evening_for_group
+    from app.models.checklist import GroupName
+
+    log.info("Sunday evening scheduler: sending incomplete task reminders")
+    for group in GroupName.ALL:
+        try:
+            async with AsyncSessionLocal() as db:
+                await send_sunday_evening_for_group(group, db)
+        except Exception:
+            log.exception("Sunday evening scheduler: group %s failed", group)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
@@ -89,6 +117,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         hour=6,
         minute=0,
         id="weekly_checklist_generation",
+    )
+
+    # Sunday 9:00 AM Central — send full weekly task list to each group
+    scheduler.add_job(
+        _run_sunday_checklist_morning,
+        "cron",
+        day_of_week="sun",
+        hour=9,
+        minute=0,
+        timezone="America/Chicago",
+        id="sunday_checklist_morning",
+    )
+
+    # Sunday 7:00 PM Central — send incomplete task reminder to each group + DM assigned users
+    scheduler.add_job(
+        _run_sunday_evening_reminder,
+        "cron",
+        day_of_week="sun",
+        hour=19,
+        minute=0,
+        timezone="America/Chicago",
+        id="sunday_checklist_reminder",
     )
 
     scheduler.start()
