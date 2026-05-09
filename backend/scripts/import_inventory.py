@@ -57,6 +57,11 @@ try:
         r.raise_for_status()
         return r.json()
 
+    def _api_patch(client: "httpx.Client", path: str, body: dict) -> Any:
+        r = client.patch(path, json=body)
+        r.raise_for_status()
+        return r.json()
+
     def _login(base_url: str, username: str, password: str) -> str:
         with httpx.Client(base_url=base_url, timeout=30) as c:
             r = c.post("/api/auth/login", json={"username": username, "password": password})
@@ -96,6 +101,17 @@ except ImportError:
             url, data=data,
             headers={"Authorization": f"Bearer {client.token}", "Content-Type": "application/json"},
             method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            return _json.loads(resp.read())
+
+    def _api_patch(client: "_FallbackClient", path: str, body: dict) -> Any:  # type: ignore[misc]
+        url = client.base_url + path
+        data = _json.dumps(body).encode()
+        req = urllib.request.Request(
+            url, data=data,
+            headers={"Authorization": f"Bearer {client.token}", "Content-Type": "application/json"},
+            method="PATCH",
         )
         with urllib.request.urlopen(req) as resp:
             return _json.loads(resp.read())
@@ -155,13 +171,22 @@ def _fetch_all_items(client: Any, cabinet_id: int) -> list[dict]:
 
     return results
 
+
 from import_helpers import (  # noqa: E402
+    VALID_CONDITIONS,
     build_description,
+    detect_shifted_sheet,
+    generate_sku,
     is_blank_placeholder,
     normalize_headers,
     normalize_name,
+    parse_bin_requires_full_checkout,
+    parse_condition,
     parse_consumable,
+    parse_low_stock_threshold,
     parse_quantity,
+    parse_unit_price,
+    room_sku_prefix,
 )
 
 
@@ -195,6 +220,8 @@ class InventoryCache:
         self.bins: dict[tuple[int, str], int] = {}
         # (cabinet_id, bin_id_or_none, item_name_casefold) → dict (existing item)
         self.items: dict[tuple[int, Optional[int], str], dict] = {}
+        # uppercase SKU → True (for existing-SKU conflict detection)
+        self.skus: set[str] = set()
 
     def load(self, client: Any) -> None:
         print("  Fetching rooms …", end=" ", flush=True)
@@ -217,12 +244,19 @@ class InventoryCache:
         print(f"{len(self.bins)} found")
 
         print("  Fetching items …", end=" ", flush=True)
+        all_items: list[dict] = []
         for cab_id in cabinet_ids:
             for item in _fetch_all_items(client, cab_id):
                 bin_id = item.get("bin_id")
                 key = (item["cabinet_id"], bin_id, normalize_name(item["name"]))
                 self.items[key] = item
+                all_items.append(item)
         print(f"{len(self.items)} found")
+
+        # Index existing SKUs for conflict detection
+        for item in all_items:
+            if item.get("sku"):
+                self.skus.add(item["sku"].upper())
 
 
 # ---------------------------------------------------------------------------
@@ -244,9 +278,43 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
     _cabinets_to_create: dict[tuple, dict] = {}       # (room_key, name) → payload
     _bins_to_create: dict[tuple, dict] = {}           # (cab_key, label) → payload
 
+    # SKU tracking within this CSV run
+    _csv_skus: dict[str, int] = {}        # uppercase SKU → row_num (first seen)
+    _sku_counters: dict[str, int] = {}    # prefix → next counter to try
+
     def get_col(row: dict, key: str, default: str = "") -> str:
         col_header = header_map.get(key)
         return row.get(col_header, default).strip() if col_header else default
+
+    # Pre-scan: aggregate BFCO explicit values per bin identity order-independently.
+    # key: (room_casefold, cab_casefold, bin_casefold)
+    # val: {"value": bool, "has_conflict": bool, "first_value": bool, "conflict_value": bool}
+    _bin_bfco_prescan: dict[tuple, dict] = {}
+    for _ps_idx, _ps_row in enumerate(rows, start=2):
+        _ps_bin = get_col(_ps_row, "bin")
+        _ps_room = get_col(_ps_row, "room")
+        _ps_cab = get_col(_ps_row, "cabinet")
+        if is_blank_placeholder(_ps_bin):
+            _ps_bin = ""
+        if is_blank_placeholder(_ps_room):
+            _ps_room = ""
+        if is_blank_placeholder(_ps_cab):
+            _ps_cab = ""
+        if not _ps_bin or not _ps_room or not _ps_cab:
+            continue
+        _ps_val, _ps_explicit, _ps_err = parse_bin_requires_full_checkout(
+            get_col(_ps_row, "bin_requires_full_checkout")
+        )
+        if _ps_err or not _ps_explicit:
+            continue
+        _ps_key = (_ps_room.casefold(), _ps_cab.casefold(), _ps_bin.casefold())
+        if _ps_key not in _bin_bfco_prescan:
+            _bin_bfco_prescan[_ps_key] = {
+                "value": _ps_val, "has_conflict": False, "first_value": _ps_val,
+            }
+        elif _bin_bfco_prescan[_ps_key]["value"] != _ps_val:
+            _bin_bfco_prescan[_ps_key]["has_conflict"] = True
+            _bin_bfco_prescan[_ps_key]["conflict_value"] = _ps_val
 
     for idx, row in enumerate(rows, start=2):  # row 1 = header
         rr = RowResult(idx, row)
@@ -255,23 +323,23 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
         item_name = get_col(row, "name")
         room_name = get_col(row, "room")
         quantity_raw = get_col(row, "quantity")
-        cabinet_name = get_col(row, "place")
+        cabinet_name = get_col(row, "cabinet")
         bin_label = get_col(row, "bin")
         consumable_raw = get_col(row, "consumable")
         notes_raw = get_col(row, "notes")
+        unit_raw = get_col(row, "unit")
+        lst_raw = get_col(row, "low_stock_threshold")
+        unit_price_raw = get_col(row, "unit_price")
+        condition_raw = get_col(row, "condition")
+        sku_raw = get_col(row, "sku")
+        bfco_raw = get_col(row, "bin_requires_full_checkout")
 
-        # Fall back to a separate Amount column when the Quantity cell is blank.
-        # This handles sheets where Amount and Metric are separate columns and
-        # both a Quantity header and an Amount header exist.
-        if not quantity_raw:
-            quantity_raw = get_col(row, "amount")
-
-        # Combine separate Metric column into the quantity string when present.
-        # Only append when quantity_raw has no alphabetic characters yet so we
-        # do not double-append if the sheet already encodes unit in the string.
-        metric_raw = get_col(row, "metric")
-        if metric_raw and not any(c.isalpha() for c in quantity_raw):
-            quantity_raw = f"{quantity_raw} {metric_raw}".strip()
+        # Combine separate unit column into quantity string when present and
+        # quantity has no alphabetic characters yet, for backward compat with
+        # sheets that use a separate Metric/Unit column.
+        if unit_raw and not any(c.isalpha() for c in quantity_raw):
+            quantity_raw = f"{quantity_raw} {unit_raw}".strip()
+            unit_raw = ""  # unit will be extracted by parse_quantity
 
         # Normalize spreadsheet placeholder values (—, -, N/A, none, null, …)
         if is_blank_placeholder(item_name):
@@ -296,7 +364,7 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
             continue
 
         if not cabinet_name:
-            rr.errors.append("Place/Cabinet is blank — row skipped")
+            rr.errors.append("Cabinet is blank — row skipped")
             rr.action = "warn"
             results.append(rr)
             continue
@@ -315,23 +383,77 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
             results.append(rr)
             continue
 
+        # --- Unit: reconcile quantity-embedded unit with explicit unit column ---
+        final_unit: Optional[str] = qty.unit
+
+        if unit_raw:
+            # unit_raw was NOT appended to quantity_raw (quantity already had alpha chars)
+            if final_unit is None:
+                final_unit = unit_raw
+            elif final_unit.lower() != unit_raw.lower():
+                rr.errors.append(
+                    f"Unit conflict: quantity string implies unit='{final_unit}' "
+                    f"but Unit column says '{unit_raw}' — row skipped"
+                )
+                rr.action = "warn"
+                results.append(rr)
+                continue
+            # else: same value — no conflict
+
         # --- Consumable -------------------------------------------------
         cons = parse_consumable(consumable_raw)
+        if cons.error:
+            rr.errors.append(cons.error)
+            rr.action = "warn"
+            results.append(rr)
+            continue
+
         if cons.is_unknown:
             rr.warnings.append(
-                f"Consumable value '{consumable_raw}' is blank/unrecognised; "
-                "defaulting to False. A [consumable: unknown] note will be added to the item."
+                f"Consumable column is blank; defaulting to False. "
+                "A [consumable: unknown] note will be added to the item."
             )
 
-        # --- Description ------------------------------------------------
-        description = build_description(notes_raw, qty.unit, cons.is_unknown)
+        # --- Low Stock Threshold ----------------------------------------
+        lst = parse_low_stock_threshold(lst_raw)
+        if lst.error:
+            rr.errors.append(lst.error)
+            rr.action = "warn"
+            results.append(rr)
+            continue
+
+        # --- Unit Price -------------------------------------------------
+        up = parse_unit_price(unit_price_raw)
+        if up.error:
+            rr.errors.append(up.error)
+            rr.action = "warn"
+            results.append(rr)
+            continue
+
+        # --- Condition --------------------------------------------------
+        condition, cond_error = parse_condition(condition_raw)
+        if cond_error:
+            rr.errors.append(cond_error)
+            rr.action = "warn"
+            results.append(rr)
+            continue
+
+        # --- Bin Requires Full Checkout ---------------------------------
+        bfco_value, bfco_explicit, bfco_error = parse_bin_requires_full_checkout(bfco_raw)
+        if bfco_error:
+            rr.errors.append(bfco_error)
+            rr.action = "warn"
+            results.append(rr)
+            continue
+
+        # Description ------------------------------------------------
+        description = build_description(notes_raw, final_unit, cons.is_unknown)
 
         # --- Resolve room -----------------------------------------------
         room_key = room_name.casefold()
         if room_key not in cache.rooms:
             if room_key not in {k.casefold() for k in _rooms_to_create}:
                 _rooms_to_create[room_key] = {"name": room_name}
-            # Assign a sentinel so later same-name lookups work within this run
             cache.rooms[room_key] = f"NEW:{room_name}"  # type: ignore[assignment]
 
         room_id_or_sentinel = cache.rooms[room_key]
@@ -348,7 +470,27 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
 
         # --- Resolve bin (optional) ------------------------------------
         bin_id_or_sentinel: Any = None
+        existing_bin_id: Optional[int] = None
+        resolved_bfco_value: bool = False
+        resolved_bfco_explicit: bool = False
         if bin_label:
+            bfco_key = (room_key, cabinet_name.casefold(), bin_label.casefold())
+            prescan_entry = _bin_bfco_prescan.get(bfco_key)
+
+            if prescan_entry and prescan_entry["has_conflict"]:
+                fv = prescan_entry["first_value"]
+                cv = prescan_entry["conflict_value"]
+                rr.errors.append(
+                    f"Conflicting 'Bin Requires Full Checkout' for bin '{bin_label}': "
+                    f"{fv} vs {cv} across rows — fix before importing"
+                )
+                rr.action = "warn"
+                results.append(rr)
+                continue
+
+            resolved_bfco_value = prescan_entry["value"] if prescan_entry else False
+            resolved_bfco_explicit = prescan_entry is not None
+
             bin_key_tuple = (cabinet_id_or_sentinel, bin_label.casefold())
             if bin_key_tuple not in cache.bins:
                 tb_key = (room_key, cabinet_name.casefold(), bin_label.casefold())
@@ -356,11 +498,16 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
                     _bins_to_create[tb_key] = {
                         "label": bin_label,
                         "cabinet_sentinel": cabinet_id_or_sentinel,
+                        "requires_full_bin_checkout": resolved_bfco_value,
                     }
                 cache.bins[bin_key_tuple] = f"NEW:{bin_label}"  # type: ignore[assignment]
+            else:
+                raw_bin_id = cache.bins[bin_key_tuple]
+                if isinstance(raw_bin_id, int):
+                    existing_bin_id = raw_bin_id
             bin_id_or_sentinel = cache.bins[bin_key_tuple]
 
-        # --- Duplicate detection ----------------------------------------
+        # --- Duplicate detection (name-based) ----------------------------
         item_key = (
             cabinet_id_or_sentinel,
             bin_id_or_sentinel,
@@ -379,16 +526,64 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
         # Mark as seen so later rows don't duplicate within the same import
         cache.items[item_key] = {"name": item_name, "_pending": True}
 
+        # --- SKU resolution ---------------------------------------------
+        sku_value: Optional[str] = None
+        sku_source: str = "none"
+
+        raw_sku = sku_raw.strip() if sku_raw else ""
+        if raw_sku and not is_blank_placeholder(raw_sku):
+            # Provided SKU — check for intra-CSV and existing-backend conflicts
+            upper_sku = raw_sku.upper()
+            if upper_sku in _csv_skus:
+                rr.errors.append(
+                    f"Duplicate SKU '{raw_sku}' in this CSV (first seen at row {_csv_skus[upper_sku]}) — row skipped"
+                )
+                rr.action = "warn"
+                results.append(rr)
+                continue
+            if upper_sku in cache.skus:
+                rr.errors.append(
+                    f"SKU '{raw_sku}' already exists in the system — row skipped"
+                )
+                rr.action = "warn"
+                results.append(rr)
+                continue
+            sku_value = raw_sku
+            sku_source = "provided"
+            _csv_skus[upper_sku] = idx
+            cache.skus.add(upper_sku)
+        else:
+            # Blank SKU — generate one
+            prefix = room_sku_prefix(room_name)
+            counter = _sku_counters.get(prefix, 0) + 1
+            candidate = generate_sku(room_name, counter)
+            while candidate.upper() in cache.skus or candidate.upper() in _csv_skus:
+                counter += 1
+                candidate = generate_sku(room_name, counter)
+            _sku_counters[prefix] = counter
+            sku_value = candidate
+            sku_source = "generated"
+            _csv_skus[candidate.upper()] = idx
+            cache.skus.add(candidate.upper())
+
         # --- Build payload (sentinels replaced with real IDs at apply time) ---
         rr.item_payload = {
             "_room_name": room_name,
             "_cabinet_name": cabinet_name,
             "_bin_label": bin_label or None,
+            "_bfco_explicit": resolved_bfco_explicit,
+            "_existing_bin_id": existing_bin_id,
             "name": item_name,
             "quantity_total": qty.value,
             "is_consumable": cons.value,
             "description": description,
-            "condition": "GOOD",
+            "condition": condition,
+            "unit": final_unit,
+            "low_stock_threshold": lst.value,
+            "unit_price": up.value,
+            "sku": sku_value,
+            "sku_source": sku_source,
+            "bin_requires_full_checkout": resolved_bfco_value,
         }
         rr.action = "create"
         results.append(rr)
@@ -396,7 +591,7 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
     return results
 
 
-def print_summary(results: list[RowResult], dry_run: bool) -> None:
+def print_summary(results: list[RowResult], dry_run: bool, unknown_col_warnings: list[str] | None = None) -> None:
     creates = [r for r in results if r.action == "create"]
     skips = [r for r in results if r.action == "skip"]
     warns = [r for r in results if r.action == "warn" or r.errors]
@@ -406,6 +601,12 @@ def print_summary(results: list[RowResult], dry_run: bool) -> None:
     bins_to_create: set[str] = set()
     unknown_consumable_rows: list[RowResult] = []
     qty_warning_rows: list[RowResult] = []
+    lst_count = 0
+    up_count = 0
+    frac_qty_count = 0
+    generated_sku_count = 0
+    duplicate_sku_count = 0
+    bfco_count = 0
 
     for r in creates:
         rooms_to_create.add(r.location.get("room", ""))
@@ -418,23 +619,51 @@ def print_summary(results: list[RowResult], dry_run: bool) -> None:
                 unknown_consumable_rows.append(r)
                 break
         for w in r.warnings:
-            if "quantity" in w.lower() or "parse" in w.lower() or "blank" in w.lower() and "consumable" not in w.lower():
+            if "quantity" in w.lower() or "parse" in w.lower() or (
+                "blank" in w.lower() and "consumable" not in w.lower()
+            ):
                 qty_warning_rows.append(r)
+                break
+        p = r.item_payload or {}
+        if p.get("low_stock_threshold") is not None:
+            lst_count += 1
+        if p.get("unit_price") is not None:
+            up_count += 1
+        qty_val = p.get("quantity_total", 0)
+        if qty_val and qty_val != int(qty_val):
+            frac_qty_count += 1
+        if p.get("sku_source") == "generated":
+            generated_sku_count += 1
+        if p.get("bin_requires_full_checkout"):
+            bfco_count += 1
+
+    for r in warns:
+        for e in r.errors:
+            if "duplicate sku" in e.lower() or "already exists in this csv" in e.lower():
+                duplicate_sku_count += 1
                 break
 
     mode = "DRY RUN — no data written" if dry_run else "COMMITTED"
     print(f"\n{'='*60}")
     print(f"  Import Summary  [{mode}]")
     print(f"{'='*60}")
-    print(f"  Rows read:                  {len(results)}")
-    print(f"  Items to create:            {len(creates)}")
-    print(f"  Rows skipped (duplicate):   {len(skips)}")
-    print(f"  Rows with errors/warnings:  {len(warns)}")
-    print(f"  Rooms referenced:           {len(rooms_to_create)}")
-    print(f"  Cabinets referenced:        {len(cabinets_to_create)}")
-    print(f"  Bins referenced:            {len(bins_to_create)}")
-    print(f"  Unknown consumable status:  {len(unknown_consumable_rows)}")
-    print(f"  Quantity parse warnings:    {len(qty_warning_rows)}")
+    print(f"  Rows read:                    {len(results)}")
+    print(f"  Items to create:              {len(creates)}")
+    print(f"  Rows skipped (duplicate):     {len(skips)}")
+    print(f"  Rows with errors/warnings:    {len(warns)}")
+    print(f"  Rooms referenced:             {len(rooms_to_create)}")
+    print(f"  Cabinets referenced:          {len(cabinets_to_create)}")
+    print(f"  Bins referenced:              {len(bins_to_create)}")
+    print(f"  Unknown consumable (blank):   {len(unknown_consumable_rows)}")
+    print(f"  Quantity parse warnings:      {len(qty_warning_rows)}")
+    print(f"  Low-stock thresholds set:     {lst_count}")
+    print(f"  Unit prices set:              {up_count}")
+    print(f"  Fractional/decimal qty rows:  {frac_qty_count}")
+    print(f"  SKUs generated (blank):       {generated_sku_count}")
+    print(f"  Duplicate SKUs found:         {duplicate_sku_count}")
+    print(f"  Bin full-checkout required:   {bfco_count}")
+    if unknown_col_warnings:
+        print(f"  Unknown columns ignored:      {len(unknown_col_warnings)}")
     print(f"{'='*60}\n")
 
     if warns:
@@ -461,12 +690,26 @@ def apply_import(results: list[RowResult], client: Any, cache: InventoryCache) -
     """
     creates = [r for r in results if r.action == "create" and r.item_payload]
 
-    # We'll build name→real_id maps as we create things, keyed the same way
-    # as the cache (which still holds sentinels for pending entities).
     real_room_ids: dict[str, int] = {}
     real_cabinet_ids: dict[tuple, int] = {}
     real_bin_ids: dict[tuple, int] = {}
 
+    # Phase 1: PATCH existing bins before any item creation.
+    # Collect from payloads (already resolved order-independently by process_rows).
+    # Failure here propagates as RuntimeError, aborting item creation entirely.
+    _pending_bin_patches: dict[int, bool] = {}
+    for r in creates:
+        p_tmp = r.item_payload
+        if p_tmp.get("_bfco_explicit") and p_tmp.get("_existing_bin_id"):
+            bin_id_tmp: int = p_tmp["_existing_bin_id"]
+            if bin_id_tmp not in _pending_bin_patches:
+                _pending_bin_patches[bin_id_tmp] = p_tmp["bin_requires_full_checkout"]
+
+    for bin_id_to_patch, bfco_val in _pending_bin_patches.items():
+        _api_patch(client, f"/api/bins/{bin_id_to_patch}", {"requires_full_bin_checkout": bfco_val})
+        print(f"  Updated bin:     id={bin_id_to_patch} requires_full_bin_checkout={bfco_val}")
+
+    # Phase 2: Create rooms, cabinets, new bins, and items.
     for r in creates:
         p = r.item_payload
         room_name: str = p["_room_name"]
@@ -516,15 +759,18 @@ def apply_import(results: list[RowResult], client: Any, cache: InventoryCache) -
         bin_id: Optional[int] = None
         if bin_label:
             bin_tuple = (cab_tuple, bin_label.casefold())
+            bfco_value: bool = p.get("bin_requires_full_checkout", False)
             if bin_tuple not in real_bin_ids:
                 existing_bin = cache.bins.get((cabinet_id, bin_label.casefold()))
                 if isinstance(existing_bin, int):
                     real_bin_ids[bin_tuple] = existing_bin
+                    # PATCH already applied in Phase 1 — no scheduling needed
                 else:
                     try:
                         created_bin = _api_post(client, "/api/bins", {
                             "label": bin_label,
                             "cabinet_id": cabinet_id,
+                            "requires_full_bin_checkout": bfco_value,
                         })
                         real_bin_ids[bin_tuple] = created_bin["id"]
                         print(f"  Created bin:     {bin_label} (id={created_bin['id']}, cabinet={cabinet_name})")
@@ -535,17 +781,23 @@ def apply_import(results: list[RowResult], client: Any, cache: InventoryCache) -
             bin_id = real_bin_ids[bin_tuple]
 
         # --- Item -------------------------------------------------------
-        item_body = {
+        item_body: dict[str, Any] = {
             "name": p["name"],
             "quantity_total": p["quantity_total"],
             "is_consumable": p["is_consumable"],
             "cabinet_id": cabinet_id,
             "condition": p["condition"],
         }
-        if bin_id:
+        if bin_id is not None:
             item_body["bin_id"] = bin_id
         if p.get("description"):
             item_body["description"] = p["description"]
+        if p.get("sku") is not None:
+            item_body["sku"] = p["sku"]
+        if p.get("low_stock_threshold") is not None:
+            item_body["low_stock_threshold"] = p["low_stock_threshold"]
+        if p.get("unit_price") is not None:
+            item_body["unit_price"] = p["unit_price"]
 
         try:
             created_item = _api_post(client, "/api/items", item_body)
@@ -593,18 +845,27 @@ def _preflight_report_paths(report_path: Path) -> tuple[Path, Path]:
 def write_report(results: list[RowResult], out_path: Path) -> None:
     report = []
     for r in results:
+        p = r.item_payload or {}
         report.append({
             "row": r.row_num,
             "action": r.action,
-            "item": r.item_payload.get("name", "") if r.item_payload else "",
+            "item": p.get("name", ""),
             "room": r.location.get("room", ""),
             "cabinet": r.location.get("cabinet", ""),
             "bin": r.location.get("bin", ""),
-            "quantity": r.item_payload.get("quantity_total", "") if r.item_payload else "",
-            "is_consumable": r.item_payload.get("is_consumable", "") if r.item_payload else "",
+            "quantity_total": p.get("quantity_total", ""),
+            "unit": p.get("unit", ""),
+            "consumable": p.get("is_consumable", ""),
+            "low_stock_threshold": p.get("low_stock_threshold", ""),
+            "unit_price": p.get("unit_price", ""),
+            "condition": p.get("condition", ""),
+            "sku": p.get("sku", ""),
+            "sku_source": p.get("sku_source", ""),
+            "bin_requires_full_checkout": p.get("bin_requires_full_checkout", ""),
+            "description": p.get("description", ""),
             "warnings": "; ".join(r.warnings),
             "errors": "; ".join(r.errors),
-            "created_id": (r.item_payload or {}).get("_created_id", ""),
+            "created_id": p.get("_created_id", ""),
         })
 
     json_path = out_path.with_suffix(".json")
@@ -668,10 +929,19 @@ def main() -> None:
 
     dry_run = not args.commit
 
-    # --- Preflight: validate exact report output paths ---------------------
-    # Runs before credential prompts, auth, or any API call so that a bad
-    # path causes an immediate, clear failure rather than one discovered
-    # after production data has already been written.
+    # --- Preflight: reject .xlsx files before doing anything --------------
+    csv_input = args.csv
+    if not csv_input.startswith("http://") and not csv_input.startswith("https://"):
+        suffix = Path(csv_input).suffix.lower()
+        if suffix in (".xlsx", ".xls"):
+            sys.exit(
+                f"Error: '{csv_input}' is an Excel file (.{suffix.lstrip('.')}).\n"
+                "Please export only the 'Inventory Import' sheet as CSV first:\n"
+                "  File → Download → Comma Separated Values (.csv)\n"
+                "Then run this script against the exported .csv file."
+            )
+
+    # --- Preflight: validate exact report output paths --------------------
     report_path = Path(args.report)
     _preflight_report_paths(report_path)
 
@@ -710,7 +980,6 @@ def main() -> None:
     client = _make_client(base_url, token)
 
     # --- Load CSV ----------------------------------------------------------
-    csv_input = args.csv
     rows: list[dict] = []
     raw_headers: list[str] = []
 
@@ -737,9 +1006,25 @@ def main() -> None:
 
     # --- Validate headers --------------------------------------------------
     try:
-        header_map = normalize_headers(raw_headers)
+        header_map, unknown_col_warnings = normalize_headers(raw_headers)
     except ValueError as exc:
         sys.exit(str(exc))
+
+    if unknown_col_warnings:
+        print("Column warnings:")
+        for w in unknown_col_warnings:
+            print(f"  [warn] {w}")
+        print()
+
+    # --- Shifted-sheet detection -------------------------------------------
+    shift_warning = detect_shifted_sheet(rows, header_map)
+    if shift_warning:
+        print(f"[WARN] {shift_warning}\n")
+        if not dry_run:
+            sys.exit(
+                "Aborting commit: sheet appears misaligned. "
+                "Fix the CSV column order and retry."
+            )
 
     # --- Fetch existing inventory ------------------------------------------
     print("Loading existing inventory …")
@@ -749,14 +1034,20 @@ def main() -> None:
 
     # --- Process rows (pure, no network) ----------------------------------
     results = process_rows(rows, header_map, cache)
-    print_summary(results, dry_run)
+    print_summary(results, dry_run, unknown_col_warnings)
+
+    # --- Validation gate: refuse commit if any rows have errors -----------
+    error_rows = [r for r in results if r.action == "warn" and r.errors]
+    if not dry_run and error_rows:
+        print(f"Cannot commit: {len(error_rows)} row(s) have errors. Fix them and retry.")
+        sys.exit(1)
 
     # --- Apply (if --commit) -----------------------------------------------
     if not dry_run:
         print("Applying import …")
         apply_import(results, client, cache)
         print("\nImport complete.\n")
-        print_summary(results, dry_run=False)
+        print_summary(results, dry_run=False, unknown_col_warnings=unknown_col_warnings)
 
     # --- Write report ------------------------------------------------------
     print("Writing import report …")

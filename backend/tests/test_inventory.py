@@ -237,3 +237,126 @@ async def test_update_item(client: AsyncClient, db: AsyncSession):
     r = await client.patch(f"/api/items/{item['id']}", json={"name": "Mallet"}, headers=headers)
     assert r.status_code == 200
     assert r.json()["name"] == "Mallet"
+
+
+# ─── Bin requires_full_bin_checkout tests ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_bin_default_requires_full_checkout_false(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+
+    r = await client.post("/api/bins", json={"label": "B1", "cabinet_id": cab["id"]}, headers=headers)
+    assert r.status_code == 201
+    assert r.json()["requires_full_bin_checkout"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_bin_with_requires_full_checkout_true(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+
+    r = await client.post(
+        "/api/bins",
+        json={"label": "B1", "cabinet_id": cab["id"], "requires_full_bin_checkout": True},
+        headers=headers,
+    )
+    assert r.status_code == 201
+    assert r.json()["requires_full_bin_checkout"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_bin_requires_full_checkout(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+    bin_ = (await client.post("/api/bins", json={"label": "B1", "cabinet_id": cab["id"]}, headers=headers)).json()
+    assert bin_["requires_full_bin_checkout"] is False
+
+    r = await client.patch(f"/api/bins/{bin_['id']}", json={"requires_full_bin_checkout": True}, headers=headers)
+    assert r.status_code == 200
+    assert r.json()["requires_full_bin_checkout"] is True
+
+
+@pytest.mark.asyncio
+async def test_bin_out_includes_requires_full_bin_checkout(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+    await client.post("/api/bins", json={"label": "B1", "cabinet_id": cab["id"], "requires_full_bin_checkout": True}, headers=headers)
+
+    r = await client.get(f"/api/bins?cabinet_id={cab['id']}", headers=headers)
+    assert r.status_code == 200
+    bins = r.json()
+    assert len(bins) == 1
+    assert "requires_full_bin_checkout" in bins[0]
+    assert bins[0]["requires_full_bin_checkout"] is True
+
+
+@pytest.mark.asyncio
+async def test_individual_checkout_blocked_when_bin_requires_full_checkout(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+    bin_ = (await client.post(
+        "/api/bins",
+        json={"label": "B1", "cabinet_id": cab["id"], "requires_full_bin_checkout": True},
+        headers=headers,
+    )).json()
+    item = (await client.post(
+        "/api/items",
+        json={"name": "Wrench", "quantity_total": 3, "cabinet_id": cab["id"], "bin_id": bin_["id"]},
+        headers=headers,
+    )).json()
+
+    # Get admin user id from users list
+    users = (await client.get("/api/users", headers=headers)).json()
+    admin_id = next(u["id"] for u in users if u["username"] == "admin")
+    r = await client.post(
+        "/api/transactions/checkout",
+        json={"item_id": item["id"], "user_id": admin_id, "quantity": 1},
+        headers=headers,
+    )
+    assert r.status_code == 409
+    detail = r.json()["detail"].lower()
+    assert "full" in detail or "whole" in detail
+
+
+@pytest.mark.asyncio
+async def test_individual_checkout_allowed_when_bin_does_not_require_full_checkout(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+    bin_ = (await client.post(
+        "/api/bins",
+        json={"label": "B1", "cabinet_id": cab["id"], "requires_full_bin_checkout": False},
+        headers=headers,
+    )).json()
+    item = (await client.post(
+        "/api/items",
+        json={"name": "Wrench", "quantity_total": 3, "cabinet_id": cab["id"], "bin_id": bin_["id"]},
+        headers=headers,
+    )).json()
+
+    users = (await client.get("/api/users", headers=headers)).json()
+    admin_id = next(u["id"] for u in users if u["username"] == "admin")
+    r = await client.post(
+        "/api/transactions/checkout",
+        json={"item_id": item["id"], "user_id": admin_id, "quantity": 1},
+        headers=headers,
+    )
+    assert r.status_code == 201

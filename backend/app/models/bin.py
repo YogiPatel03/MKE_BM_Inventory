@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -32,6 +32,10 @@ class Bin(Base):
     group_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     location_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    requires_full_bin_checkout: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
 
     # QR code token for bin scanning
     qr_code_token: Mapped[Optional[str]] = mapped_column(

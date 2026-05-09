@@ -9,6 +9,7 @@ class BinBase(BaseModel):
     group_number: Optional[int] = None
     location_note: Optional[str] = None
     description: Optional[str] = None
+    requires_full_bin_checkout: bool = False
 
 
 class BinCreate(BinBase):
@@ -20,6 +21,7 @@ class BinUpdate(BaseModel):
     group_number: Optional[int] = None
     location_note: Optional[str] = None
     description: Optional[str] = None
+    requires_full_bin_checkout: Optional[bool] = None
 
 
 class BinOut(BinBase):

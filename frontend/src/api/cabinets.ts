@@ -50,6 +50,7 @@ export async function createBin(payload: {
   groupNumber?: number;
   locationNote?: string;
   description?: string;
+  requiresFullBinCheckout?: boolean;
 }): Promise<Bin> {
   const { data } = await apiClient.post<Bin>("/bins", {
     label: payload.label,
@@ -57,6 +58,25 @@ export async function createBin(payload: {
     group_number: payload.groupNumber,
     location_note: payload.locationNote,
     description: payload.description,
+    requires_full_bin_checkout: payload.requiresFullBinCheckout ?? false,
+  });
+  return data;
+}
+
+export async function updateBin(
+  id: number,
+  payload: {
+    label?: string;
+    locationNote?: string | null;
+    description?: string | null;
+    requiresFullBinCheckout?: boolean;
+  }
+): Promise<Bin> {
+  const { data } = await apiClient.patch<Bin>(`/bins/${id}`, {
+    label: payload.label,
+    location_note: payload.locationNote,
+    description: payload.description,
+    requires_full_bin_checkout: payload.requiresFullBinCheckout,
   });
   return data;
 }

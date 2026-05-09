@@ -85,7 +85,7 @@ function EditCabinetModal({ cabinet, onClose }: { cabinet: Cabinet; onClose: () 
   );
 }
 
-function ItemRow({ item }: { item: Item; inBin?: boolean }) {
+function ItemRow({ item, requiresFullBinCheckout }: { item: Item; inBin?: boolean; requiresFullBinCheckout?: boolean }) {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [markUsedOpen, setMarkUsedOpen] = useState(false);
 
@@ -126,14 +126,17 @@ function ItemRow({ item }: { item: Item; inBin?: boolean }) {
             Use
           </button>
         )}
-        {/* Non-consumable: individual checkout (allowed even if in a bin, unless the bin is currently checked out) */}
-        {!item.isConsumable && item.quantityAvailable > 0 && (
+        {/* Non-consumable: individual checkout blocked when bin requires full checkout */}
+        {!item.isConsumable && item.quantityAvailable > 0 && !requiresFullBinCheckout && (
           <button
             onClick={() => setCheckoutOpen(true)}
             className="btn-primary text-xs py-1 px-3"
           >
             Check out
           </button>
+        )}
+        {!item.isConsumable && requiresFullBinCheckout && (
+          <span className="text-xs text-slate-400 italic">Full bin only</span>
         )}
       </div>
       {checkoutOpen && (
@@ -208,6 +211,9 @@ function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn
           )}
           {isCheckedOut && (
             <span className="badge-yellow text-xs">Checked out</span>
+          )}
+          {bin.requiresFullBinCheckout && (
+            <span className="badge-blue text-xs">Full-bin checkout only</span>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -310,7 +316,7 @@ function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn
           <p className="py-4 px-4 text-sm text-slate-400">No items in this bin</p>
         ) : (
           items.map((item) => (
-            <ItemRow key={item.id} item={item} inBin={!item.isConsumable} />
+            <ItemRow key={item.id} item={item} inBin={!item.isConsumable} requiresFullBinCheckout={bin.requiresFullBinCheckout} />
           ))
         )}
       </div>

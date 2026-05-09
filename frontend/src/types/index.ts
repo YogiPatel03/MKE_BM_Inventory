@@ -75,6 +75,7 @@ export interface Bin {
   locationNote: string | null;
   description: string | null;
   qrCodeToken: string | null;
+  requiresFullBinCheckout: boolean;
   createdAt: string;
   updatedAt: string;
 }

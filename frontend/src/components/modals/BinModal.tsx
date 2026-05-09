@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { createBin } from "@/api/cabinets";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
+import { useAuthStore } from "@/store/auth";
 
 interface Props {
   cabinetId: number;
@@ -11,9 +12,12 @@ interface Props {
 
 export function BinModal({ cabinetId, onClose }: Props) {
   const qc = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+  const canManageBins = user?.role?.canManageBins ?? false;
   const [label, setLabel] = useState("");
   const [locationNote, setLocationNote] = useState("");
   const [description, setDescription] = useState("");
+  const [requiresFullBinCheckout, setRequiresFullBinCheckout] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   useEscapeKey(onClose);
@@ -28,6 +32,7 @@ export function BinModal({ cabinetId, onClose }: Props) {
         cabinetId,
         locationNote: locationNote || undefined,
         description: description || undefined,
+        requiresFullBinCheckout,
       });
       qc.invalidateQueries({ queryKey: ["bins", cabinetId] });
       onClose();
@@ -69,6 +74,28 @@ export function BinModal({ cabinetId, onClose }: Props) {
           <div>
             <label htmlFor="bin-description" className="label">Description</label>
             <textarea id="bin-description" className="input resize-none" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+          </div>
+          <div className="flex items-center justify-between py-1">
+            <div>
+              <p className="text-sm font-medium text-slate-700">Full-bin checkout only</p>
+              <p className="text-xs text-slate-500">Items in this bin must be checked out together as a unit</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={requiresFullBinCheckout}
+              disabled={!canManageBins}
+              onClick={() => canManageBins && setRequiresFullBinCheckout((v) => !v)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+                requiresFullBinCheckout ? "bg-indigo-600" : "bg-slate-200"
+              } ${!canManageBins ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  requiresFullBinCheckout ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
           </div>
           {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
           <div className="flex gap-3 pt-2">

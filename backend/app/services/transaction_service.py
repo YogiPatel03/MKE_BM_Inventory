@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import InsufficientStockError, NotFoundError, TransactionConflictError
 from app.models.activity_log import ActivityType
+from app.models.bin import Bin
 from app.models.bin_transaction import BinTransaction, BinTransactionStatus
 from app.models.item import Item
 from app.models.transaction import Transaction, TransactionStatus
@@ -69,6 +70,16 @@ async def checkout_item(
             raise TransactionConflictError(
                 f"Item '{item.name}' is inside a bin that is currently checked out as a whole. "
                 "Return the bin first, or wait for the bin to be returned."
+            )
+
+    # Block individual checkout when the bin enforces full-bin checkout only
+    if item.bin_id is not None:
+        bin_result = await db.execute(select(Bin).where(Bin.id == item.bin_id))
+        bin_ = bin_result.scalar_one_or_none()
+        if bin_ and bin_.requires_full_bin_checkout:
+            raise TransactionConflictError(
+                f"Item '{item.name}' belongs to a bin that must be checked out as a whole. "
+                "Please check out the full bin instead."
             )
 
     if item.is_consumable:
