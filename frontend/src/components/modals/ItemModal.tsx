@@ -22,6 +22,7 @@ export function ItemModal({ cabinetId, bins, onClose }: Props) {
   const [condition, setCondition] = useState("GOOD");
   const [binId, setBinId] = useState<number | "">("");
   const [isConsumable, setIsConsumable] = useState(false);
+  const [requiresRequest, setRequiresRequest] = useState(false);
   const [unitPrice, setUnitPrice] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -42,6 +43,7 @@ export function ItemModal({ cabinetId, bins, onClose }: Props) {
         condition,
         isConsumable,
         unitPrice: unitPrice !== "" ? parseFloat(unitPrice) : undefined,
+        requiresRequest,
       });
       qc.invalidateQueries({ queryKey: ["items"] });
       onClose();
@@ -120,6 +122,22 @@ export function ItemModal({ cabinetId, bins, onClose }: Props) {
               {isConsumable
                 ? "Stock reduces permanently when used. No checkout/return flow."
                 : "Uses checkout / return flow. Stock is not permanently consumed."}
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 p-3 space-y-1">
+            <label htmlFor="item-requires-request" className="flex items-center gap-3 cursor-pointer">
+              <input
+                id="item-requires-request"
+                type="checkbox"
+                checked={requiresRequest}
+                onChange={(e) => setRequiresRequest(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 accent-brand-600"
+              />
+              <span className="text-sm font-medium text-slate-800">Item needs to be requested</span>
+            </label>
+            <p className="text-xs text-slate-400 ml-7">
+              When enabled, users must request this item instead of checking it out directly.
             </p>
           </div>
 

@@ -1,5 +1,11 @@
 import { apiClient } from "./client";
 import type { Item } from "@/types";
+import {
+  toItemCreateApiPayload,
+  toItemUpdateApiPayload,
+  type ItemCreatePayload,
+  type ItemUpdatePayload,
+} from "./itemPayloads";
 
 export async function listItems(params?: {
   cabinetId?: number;
@@ -27,49 +33,15 @@ export async function getItem(id: number): Promise<Item> {
   return data;
 }
 
-export async function createItem(payload: {
-  name: string;
-  description?: string;
-  quantityTotal: number;
-  cabinetId: number;
-  binId?: number;
-  sku: string;
-  condition?: string;
-  isConsumable?: boolean;
-  unitPrice?: number;
-}): Promise<Item> {
-  const { data } = await apiClient.post<Item>("/items", {
-    name: payload.name,
-    description: payload.description,
-    quantity_total: payload.quantityTotal,
-    cabinet_id: payload.cabinetId,
-    bin_id: payload.binId,
-    sku: payload.sku,
-    condition: payload.condition,
-    is_consumable: payload.isConsumable ?? false,
-    unit_price: payload.unitPrice,
-  });
+export async function createItem(payload: ItemCreatePayload): Promise<Item> {
+  const { data } = await apiClient.post<Item>("/items", toItemCreateApiPayload(payload));
   return data;
 }
 
 export async function updateItem(
   id: number,
-  payload: {
-    name?: string;
-    description?: string | null;
-    unitPrice?: number | null;
-    lowStockThreshold?: number | null;
-    isActive?: boolean;
-    condition?: string;
-  }
+  payload: ItemUpdatePayload
 ): Promise<Item> {
-  const { data } = await apiClient.patch<Item>(`/items/${id}`, {
-    name: payload.name,
-    description: payload.description,
-    unit_price: payload.unitPrice,
-    low_stock_threshold: payload.lowStockThreshold,
-    is_active: payload.isActive,
-    condition: payload.condition,
-  });
+  const { data } = await apiClient.patch<Item>(`/items/${id}`, toItemUpdateApiPayload(payload));
   return data;
 }

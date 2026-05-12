@@ -185,6 +185,7 @@ from import_helpers import (  # noqa: E402
     parse_consumable,
     parse_low_stock_threshold,
     parse_quantity,
+    parse_requires_request,
     parse_unit_price,
     room_sku_prefix,
 )
@@ -385,6 +386,7 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
         condition_raw = get_col(row, "condition")
         sku_raw = get_col(row, "sku")
         bfco_raw = get_col(row, "bin_requires_full_checkout")
+        requires_request_raw = get_col(row, "requires_request")
 
         # Combine separate unit column into quantity string when present and
         # quantity has no alphabetic characters yet, for backward compat with
@@ -550,6 +552,16 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
         bfco_value, bfco_explicit, bfco_error = parse_bin_requires_full_checkout(bfco_raw)
         if bfco_error:
             rr.errors.append(bfco_error)
+            rr.action = "warn"
+            results.append(rr)
+            continue
+
+        # --- Item Requires Request ---------------------------------------
+        requires_request, requires_request_source, requires_request_error = parse_requires_request(
+            requires_request_raw
+        )
+        if requires_request_error:
+            rr.errors.append(requires_request_error)
             rr.action = "warn"
             results.append(rr)
             continue
@@ -731,6 +743,8 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
             "sku_source": sku_source,
             "bin_requires_full_checkout": resolved_bfco_value,
             "bin_number": bin_number or None,
+            "requires_request": requires_request,
+            "requires_request_source": requires_request_source,
         }
         rr.action = "create"
         results.append(rr)
@@ -961,6 +975,7 @@ def apply_import(results: list[RowResult], client: Any, cache: InventoryCache) -
             item_body["low_stock_threshold"] = p["low_stock_threshold"]
         if p.get("unit_price") is not None:
             item_body["unit_price"] = p["unit_price"]
+        item_body["requires_request"] = p.get("requires_request", False)
 
         try:
             created_item = _api_post(client, "/api/items", item_body)
@@ -1027,6 +1042,8 @@ def write_report(results: list[RowResult], out_path: Path) -> None:
             "sku": p.get("sku", ""),
             "sku_source": p.get("sku_source", ""),
             "bin_requires_full_checkout": p.get("bin_requires_full_checkout", ""),
+            "requires_request": p.get("requires_request", ""),
+            "requires_request_source": p.get("requires_request_source", ""),
             "description": p.get("description", ""),
             "warnings": "; ".join(r.warnings),
             "errors": "; ".join(r.errors),

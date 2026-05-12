@@ -189,6 +189,37 @@ def parse_bin_requires_full_checkout(raw: str) -> tuple[bool, bool, Optional[str
 
 
 # ---------------------------------------------------------------------------
+# Item requires-request parsing
+# ---------------------------------------------------------------------------
+
+_REQUEST_TRUE_VALUES = {"yes", "y", "true", "1"}
+_REQUEST_FALSE_VALUES = {"no", "n", "false", "0"}
+
+
+def parse_requires_request(raw: str) -> tuple[bool, str, Optional[str]]:
+    """
+    Parse Item needs to be requested column.
+
+    Returns (value, source, error):
+      Blank              -> (False, "defaulted", None)
+      Yes/True/Y/1       -> (True, "provided", None)
+      No/False/N/0       -> (False, "provided", None)
+      Other non-blank    -> (False, "provided", error)
+    """
+    s = raw.strip().lower() if raw else ""
+    if not s:
+        return False, "defaulted", None
+    if s in _REQUEST_TRUE_VALUES:
+        return True, "provided", None
+    if s in _REQUEST_FALSE_VALUES:
+        return False, "provided", None
+    return False, "provided", (
+        f"Unrecognized Item needs to be requested value '{raw.strip()}': "
+        "expected Yes/No/True/False/Y/N/1/0"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Condition parsing
 # ---------------------------------------------------------------------------
 
@@ -432,6 +463,7 @@ OPTIONAL_COLUMNS = {
     "bin", "consumable", "notes", "unit",
     "low_stock_threshold", "unit_price", "condition", "sku",
     "bin_requires_full_checkout", "shelf_code", "bin_number",
+    "requires_request",
 }
 
 # Map of normalised (casefold+strip) header → canonical key
@@ -502,6 +534,13 @@ _HEADER_ALIASES: dict[str, str] = {
     "requires full bin checkout": "bin_requires_full_checkout",
     "full bin checkout required": "bin_requires_full_checkout",
     "bin full checkout only": "bin_requires_full_checkout",
+    # item requires request
+    "item needs to be requested": "requires_request",
+    "needs request": "requires_request",
+    "requires request": "requires_request",
+    "requires checkout request": "requires_request",
+    "request required": "requires_request",
+    "must be requested": "requires_request",
 }
 
 

@@ -739,3 +739,126 @@ async def test_individual_checkout_allowed_when_bin_does_not_require_full_checko
         headers=headers,
     )
     assert r.status_code == 201
+
+
+# ─── Item requires_request schema unit tests ──────────────────────────────────
+
+def test_item_create_schema_defaults_requires_request_to_false():
+    from app.schemas.item import ItemCreate
+    item = ItemCreate(name="Drill", quantity_total=1, cabinet_id=1, sku="TST1")
+    assert item.requires_request is False
+
+
+def test_item_create_schema_accepts_requires_request_true():
+    from app.schemas.item import ItemCreate
+    item = ItemCreate(name="Drill", quantity_total=1, cabinet_id=1, sku="TST1", requires_request=True)
+    assert item.requires_request is True
+
+
+def test_item_update_schema_accepts_requires_request():
+    from app.schemas.item import ItemUpdate
+    item = ItemUpdate(requires_request=False)
+    assert item.requires_request is False
+    item2 = ItemUpdate(requires_request=True)
+    assert item2.requires_request is True
+
+
+def test_item_update_schema_requires_request_defaults_to_none():
+    from app.schemas.item import ItemUpdate
+    item = ItemUpdate()
+    assert item.requires_request is None
+
+
+# ─── Item requires_request API tests ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_item_defaults_requires_request_to_false(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+
+    r = await client.post(
+        "/api/items",
+        json={"name": "Hammer", "quantity_total": 1, "cabinet_id": cab["id"], "sku": "RRQ1"},
+        headers=headers,
+    )
+    assert r.status_code == 201
+    assert r.json()["requires_request"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_item_with_requires_request_true(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+
+    r = await client.post(
+        "/api/items",
+        json={"name": "Drill Press", "quantity_total": 1, "cabinet_id": cab["id"], "sku": "RRQ2", "requires_request": True},
+        headers=headers,
+    )
+    assert r.status_code == 201
+    assert r.json()["requires_request"] is True
+
+
+@pytest.mark.asyncio
+async def test_item_out_includes_requires_request(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+
+    created = (await client.post(
+        "/api/items",
+        json={"name": "Saw", "quantity_total": 2, "cabinet_id": cab["id"], "sku": "RRQ3"},
+        headers=headers,
+    )).json()
+
+    r = await client.get(f"/api/items/{created['id']}", headers=headers)
+    assert r.status_code == 200
+    assert "requires_request" in r.json()
+
+
+@pytest.mark.asyncio
+async def test_update_item_requires_request_false_to_true(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+
+    item = (await client.post(
+        "/api/items",
+        json={"name": "Wrench", "quantity_total": 1, "cabinet_id": cab["id"], "sku": "RRQ4"},
+        headers=headers,
+    )).json()
+    assert item["requires_request"] is False
+
+    r = await client.patch(f"/api/items/{item['id']}", json={"requires_request": True}, headers=headers)
+    assert r.status_code == 200
+    assert r.json()["requires_request"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_item_requires_request_true_to_false(client: AsyncClient, db: AsyncSession):
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = await _make_room(db)
+    cab = (await client.post("/api/cabinets", json={"name": "Cab", "room_id": room.id}, headers=headers)).json()
+
+    item = (await client.post(
+        "/api/items",
+        json={"name": "Lathe", "quantity_total": 1, "cabinet_id": cab["id"], "sku": "RRQ5", "requires_request": True},
+        headers=headers,
+    )).json()
+    assert item["requires_request"] is True
+
+    r = await client.patch(f"/api/items/{item['id']}", json={"requires_request": False}, headers=headers)
+    assert r.status_code == 200
+    assert r.json()["requires_request"] is False

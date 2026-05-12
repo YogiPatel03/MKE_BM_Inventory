@@ -16,7 +16,7 @@ import { MarkAsUsedModal } from "@/components/modals/MarkAsUsedModal";
 import { StockAdjustModal } from "@/components/modals/StockAdjustModal";
 import { MoveModal } from "@/components/modals/MoveModal";
 import { useAuthStore } from "@/store/auth";
-import type { Bin, Cabinet, UsageEvent } from "@/types";
+import type { Bin, Cabinet, Item, UsageEvent } from "@/types";
 
 async function fetchCabinets(): Promise<Cabinet[]> {
   const { data } = await apiClient.get("/cabinets");
@@ -42,7 +42,7 @@ function InlineEditModal({
   item,
   onClose,
 }: {
-  item: { id: number; name: string; description: string | null; unitPrice: number | null; lowStockThreshold: number | null };
+  item: Pick<Item, "id" | "name" | "description" | "unitPrice" | "lowStockThreshold" | "requiresRequest">;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -50,6 +50,7 @@ function InlineEditModal({
   const [description, setDescription] = useState(item.description ?? "");
   const [unitPrice, setUnitPrice] = useState(item.unitPrice?.toString() ?? "");
   const [threshold, setThreshold] = useState(item.lowStockThreshold?.toString() ?? "");
+  const [requiresRequest, setRequiresRequest] = useState(item.requiresRequest);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   useEscapeKey(onClose);
@@ -64,6 +65,7 @@ function InlineEditModal({
         description: description.trim() || null,
         unitPrice: unitPrice ? parseFloat(unitPrice) : undefined,
         lowStockThreshold: threshold ? parseFloat(threshold) : undefined,
+        requiresRequest,
       });
       qc.invalidateQueries({ queryKey: ["item", item.id] });
       qc.invalidateQueries({ queryKey: ["activity"] });
@@ -123,6 +125,21 @@ function InlineEditModal({
             />
             <p className="text-xs text-slate-400 mt-1">Alert fires when available ≤ this value. Blank = 10% of total.</p>
           </div>
+          <div className="rounded-lg border border-slate-200 p-3 space-y-1">
+            <label htmlFor="edit-item-requires-request" className="flex items-center gap-3 cursor-pointer">
+              <input
+                id="edit-item-requires-request"
+                type="checkbox"
+                checked={requiresRequest}
+                onChange={(e) => setRequiresRequest(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 accent-brand-600"
+              />
+              <span className="text-sm font-medium text-slate-800">Item needs to be requested</span>
+            </label>
+            <p className="text-xs text-slate-400 ml-7">
+              When enabled, users must request this item instead of checking it out directly.
+            </p>
+          </div>
           {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary flex-1 justify-center">Cancel</button>
@@ -142,6 +159,7 @@ export function ItemDetailPage() {
   const user = useAuthStore((s) => s.user);
   const canManage = user?.role.canManageInventory;
   const canProcess = user?.role.canProcessAnyTransaction || user?.role.canManageUsers;
+  const canBypassRequiresRequest = user?.role.name === "ADMIN" || user?.role.name === "COORDINATOR";
   const qc = useQueryClient();
   const navigate = useNavigate();
 
@@ -238,6 +256,8 @@ export function ItemDetailPage() {
   };
 
   const isInBin = item.binId !== null;
+  const canDirectCheckout = canProcess && (!item.requiresRequest || canBypassRequiresRequest);
+  const showRequestRequired = item.requiresRequest && !isInBin && !canBypassRequiresRequest;
 
   return (
     <div className="space-y-6">
@@ -257,6 +277,11 @@ export function ItemDetailPage() {
               {item.sku && <span>SKU: {item.sku}</span>}
               {binNumber && <span>Bin Number: {binNumber}</span>}
             </div>
+            {item.requiresRequest && (
+              <div className="mt-2">
+                <span className="badge-blue text-xs">Request required</span>
+              </div>
+            )}
             {item.description && (
               <p className="text-sm text-slate-600 mt-2">{item.description}</p>
             )}
@@ -278,7 +303,7 @@ export function ItemDetailPage() {
             )}
             {/* Non-consumable, not in a bin: checkout (for those who can process) or request */}
             {!item.isConsumable && !isInBin && item.quantityAvailable > 0 && (
-              canProcess ? (
+              canDirectCheckout ? (
                 <button onClick={() => setCheckoutOpen(true)} className="btn-primary">
                   Check out
                 </button>
@@ -289,7 +314,7 @@ export function ItemDetailPage() {
                   className="btn-primary"
                 >
                   <Inbox className="h-4 w-4" />
-                  {requestLoading ? "Submitting…" : "Request checkout"}
+                  {requestLoading ? "Submitting…" : item.requiresRequest ? "Request item" : "Request checkout"}
                 </button>
               )
             )}
@@ -334,6 +359,12 @@ export function ItemDetailPage() {
         </div>
       )}
 
+      {showRequestRequired && !item.isConsumable && (
+        <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+          This item must be requested before checkout.
+        </div>
+      )}
+
       {/* Attributes */}
       <div className="card p-5 grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div>
@@ -358,9 +389,14 @@ export function ItemDetailPage() {
         </div>
         <div>
           <p className="text-xs text-slate-500">Type</p>
-          <span className={item.isConsumable ? "badge-yellow" : "badge-slate"}>
-            {item.isConsumable ? "Consumable" : "Standard"}
-          </span>
+          <div className="flex flex-wrap gap-2">
+            <span className={item.isConsumable ? "badge-yellow" : "badge-slate"}>
+              {item.isConsumable ? "Consumable" : "Standard"}
+            </span>
+            {item.requiresRequest && (
+              <span className="badge-blue">Request required</span>
+            )}
+          </div>
         </div>
         {item.unitPrice != null && (
           <div>

@@ -15,7 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import InsufficientStockError, NotFoundError, TransactionConflictError
+from app.core.exceptions import InsufficientStockError, NotFoundError, PermissionDeniedError, TransactionConflictError
 from app.models.activity_log import ActivityType
 from app.models.bin import Bin
 from app.models.bin_transaction import BinTransaction, BinTransactionStatus
@@ -36,6 +36,7 @@ async def checkout_item(
     quantity: float,
     due_at: Optional[datetime],
     notes: Optional[str],
+    bypass_requires_request: bool = False,
 ) -> Transaction:
     """
     Creates a CHECKED_OUT transaction and decrements Item.quantity_available.
@@ -81,6 +82,12 @@ async def checkout_item(
                 f"Item '{item.name}' belongs to a bin that must be checked out as a whole. "
                 "Please check out the full bin instead."
             )
+
+    if item.requires_request and not bypass_requires_request:
+        raise PermissionDeniedError(
+            f"Item '{item.name}' must be requested before checkout. "
+            "Please submit a request to check out this item."
+        )
 
     if item.is_consumable:
         raise TransactionConflictError(

@@ -25,6 +25,7 @@ from import_helpers import (  # noqa: E402
     parse_consumable,
     parse_low_stock_threshold,
     parse_quantity,
+    parse_requires_request,
     parse_unit_price,
 )
 
@@ -168,6 +169,41 @@ class TestParseConsumable:
     def test_blank_raw_preserved_as_empty(self):
         r = parse_consumable("")
         assert r.raw == ""
+
+
+# ---------------------------------------------------------------------------
+# parse_requires_request
+# ---------------------------------------------------------------------------
+
+class TestParseRequiresRequest:
+    @pytest.mark.parametrize("raw", ["Yes", "yes", "YES", "True", "true", "Y", "y", "1"])
+    def test_truthy_values(self, raw):
+        value, source, err = parse_requires_request(raw)
+        assert value is True
+        assert source == "provided"
+        assert err is None
+
+    @pytest.mark.parametrize("raw", ["No", "no", "NO", "False", "false", "N", "n", "0"])
+    def test_falsy_values(self, raw):
+        value, source, err = parse_requires_request(raw)
+        assert value is False
+        assert source == "provided"
+        assert err is None
+
+    @pytest.mark.parametrize("raw", ["", "   "])
+    def test_blank_defaults_false(self, raw):
+        value, source, err = parse_requires_request(raw)
+        assert value is False
+        assert source == "defaulted"
+        assert err is None
+
+    @pytest.mark.parametrize("bad", ["Maybe", "Sometimes", "Required?", "—", "N/A", "none", "null", "-"])
+    def test_invalid_values_return_error(self, bad):
+        value, source, err = parse_requires_request(bad)
+        assert value is False
+        assert source == "provided"
+        assert err is not None
+        assert bad in err
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +573,19 @@ class TestNormalizeHeaders:
         m, w = normalize_headers(["Name", "Room", "Quantity", "Cabinet", "SKU"])
         assert "sku" in m
 
+    @pytest.mark.parametrize("header", [
+        "Item needs to be requested",
+        "Needs request",
+        "Requires request",
+        "Requires checkout request",
+        "Request required",
+        "Must be requested",
+    ])
+    def test_requires_request_optional(self, header):
+        m, w = normalize_headers(["Name", "Room", "Quantity", "Cabinet", header])
+        assert "requires_request" in m
+        assert not any(header in warn for warn in w)
+
     @pytest.mark.parametrize("header", ["Bin Number", "Bin Code", "bin_number", "bin code", "bin number"])
     def test_bin_number_optional(self, header):
         m, w = normalize_headers(["Name", "Room", "Quantity", "Cabinet", header])
@@ -614,6 +663,13 @@ class TestNormalizeHeadersConflict:
     def test_unit_price_aliases_conflict(self):
         with pytest.raises(ValueError):
             normalize_headers(["Name", "Room", "Quantity", "Cabinet", "Unit Price", "Price"])
+
+    def test_requires_request_aliases_conflict(self):
+        with pytest.raises(ValueError):
+            normalize_headers([
+                "Name", "Room", "Quantity", "Cabinet",
+                "Item needs to be requested", "Requires request",
+            ])
 
 
 # ---------------------------------------------------------------------------
@@ -906,6 +962,154 @@ class TestProcessRowsNewColumns:
         assert r.action == "create"
         assert r.item_payload["sku"] is not None
         assert r.item_payload["sku_source"] == "generated"
+
+
+# ---------------------------------------------------------------------------
+# Requires request in process_rows payloads and reports
+# ---------------------------------------------------------------------------
+
+class TestRequiresRequestImport:
+    def _run(self, value="", header="Item needs to be requested", cache=None, **overrides):
+        from import_inventory import process_rows  # noqa: PLC0415
+        headers = ["Name", "Room", "Quantity", "Cabinet", "SKU", header]
+        m, _ = normalize_headers(headers)
+        row = {
+            "Name": "Decorative Pom Poms",
+            "Room": "Store",
+            "Quantity": "5",
+            "Cabinet": "Shelf",
+            "SKU": "SMC1",
+            header: value,
+        }
+        row.update(overrides)
+        return process_rows([row], m, cache or _EmptyCache())[0]
+
+    @pytest.mark.parametrize("raw", ["Yes", "True", "Y", "1"])
+    def test_true_values_set_requires_request_true(self, raw):
+        r = self._run(raw)
+        assert r.action == "create"
+        assert r.item_payload["requires_request"] is True
+        assert r.item_payload["requires_request_source"] == "provided"
+
+    @pytest.mark.parametrize("raw", ["No", "False", "N", "0"])
+    def test_false_values_set_requires_request_false(self, raw):
+        r = self._run(raw)
+        assert r.action == "create"
+        assert r.item_payload["requires_request"] is False
+        assert r.item_payload["requires_request_source"] == "provided"
+
+    def test_blank_defaults_false(self):
+        r = self._run("")
+        assert r.action == "create"
+        assert r.item_payload["requires_request"] is False
+        assert r.item_payload["requires_request_source"] == "defaulted"
+
+    @pytest.mark.parametrize("bad", ["Maybe", "Sometimes", "Required?"])
+    def test_invalid_values_fail_row(self, bad):
+        r = self._run(bad)
+        assert r.action == "warn"
+        assert r.item_payload is None
+        assert any(bad in e for e in r.errors)
+
+    @pytest.mark.parametrize("alias", [
+        "Needs request",
+        "Requires request",
+        "Requires checkout request",
+        "Request required",
+        "Must be requested",
+    ])
+    def test_alias_headers_work(self, alias):
+        r = self._run("Yes", header=alias)
+        assert r.action == "create"
+        assert r.item_payload["requires_request"] is True
+        assert r.item_payload["requires_request_source"] == "provided"
+
+    def test_column_absent_defaults_false(self):
+        from import_inventory import process_rows  # noqa: PLC0415
+        m, _ = normalize_headers(["Name", "Room", "Quantity", "Cabinet"])
+        row = {"Name": "Markers", "Room": "Store", "Quantity": "2", "Cabinet": "Shelf"}
+        r = process_rows([row], m, _EmptyCache())[0]
+        assert r.action == "create"
+        assert r.item_payload["requires_request"] is False
+        assert r.item_payload["requires_request_source"] == "defaulted"
+
+    def test_false_value_preserved_in_payload(self):
+        r = self._run("No")
+        assert r.action == "create"
+        assert "requires_request" in r.item_payload
+        assert r.item_payload["requires_request"] is False
+
+    def test_dry_run_planning_makes_no_writes(self):
+        r = self._run("Yes")
+        assert r.action == "create"
+        assert r.item_payload["requires_request"] is True
+        assert "_created_id" not in r.item_payload
+
+    def test_invalid_value_blocks_commit_gate(self):
+        from import_inventory import process_rows  # noqa: PLC0415
+        headers = ["Name", "Room", "Quantity", "Cabinet", "Item needs to be requested"]
+        m, _ = normalize_headers(headers)
+        rows = [
+            {"Name": "Bad", "Room": "Store", "Quantity": "1", "Cabinet": "Shelf",
+             "Item needs to be requested": "Maybe"},
+            {"Name": "Good", "Room": "Store", "Quantity": "1", "Cabinet": "Shelf",
+             "Item needs to be requested": "No"},
+        ]
+        results = process_rows(rows, m, _EmptyCache())
+        error_rows = [r for r in results if r.action == "warn" and r.errors]
+        assert len(error_rows) == 1
+        assert results[1].action == "create"
+
+    def test_existing_bin_number_behavior_still_works_with_requires_request(self):
+        from import_inventory import process_rows  # noqa: PLC0415
+        headers = [
+            "Name", "Room", "Quantity", "Cabinet", "Bin", "Shelf Code", "Bin Number",
+            "Item needs to be requested",
+        ]
+        m, _ = normalize_headers(headers)
+        row = {
+            "Name": "Glue", "Room": "Store", "Quantity": "1", "Cabinet": "Shelf",
+            "Bin": "Glue Bin", "Shelf Code": "A", "Bin Number": "SMCD1",
+            "Item needs to be requested": "Yes",
+        }
+        r = process_rows([row], m, _EmptyCache())[0]
+        assert r.action == "create"
+        assert r.item_payload["bin_number"] == "SMCD1"
+        assert r.item_payload["_bin_label"] == "Glue Bin"
+        assert r.item_payload["requires_request"] is True
+
+    def test_report_includes_requires_request_fields(self, tmp_path):
+        import json as _json  # noqa: PLC0415
+        from import_inventory import write_report  # noqa: PLC0415
+
+        r = self._run("Yes")
+        write_report([r], tmp_path / "report")
+        data = _json.loads((tmp_path / "report.json").read_text())
+        assert data[0]["item"] == "Decorative Pom Poms"
+        assert data[0]["requires_request"] is True
+        assert data[0]["requires_request_source"] == "provided"
+        assert data[0]["errors"] == ""
+
+    def test_report_identifies_defaulted_source(self, tmp_path):
+        import json as _json  # noqa: PLC0415
+        from import_inventory import write_report  # noqa: PLC0415
+
+        r = self._run("", Name="Markers", SKU="SMC2")
+        write_report([r], tmp_path / "report")
+        data = _json.loads((tmp_path / "report.json").read_text())
+        assert data[0]["item"] == "Markers"
+        assert data[0]["requires_request"] is False
+        assert data[0]["requires_request_source"] == "defaulted"
+
+    def test_report_includes_validation_errors(self, tmp_path):
+        import json as _json  # noqa: PLC0415
+        from import_inventory import write_report  # noqa: PLC0415
+
+        r = self._run("Maybe")
+        write_report([r], tmp_path / "report")
+        data = _json.loads((tmp_path / "report.json").read_text())
+        assert data[0]["requires_request"] == ""
+        assert "Maybe" in data[0]["errors"]
 
 
 # ---------------------------------------------------------------------------
@@ -1545,7 +1749,7 @@ class TestApplyImportDoesNotPostWarnRows:
         assert item_posts[0]["body"]["name"] == "Good"
 
     def test_apply_import_passes_new_fields(self):
-        """apply_import must include sku, low_stock_threshold, unit_price in item POST body."""
+        """apply_import must include sku, low_stock_threshold, unit_price, requires_request in item POST body."""
         from import_inventory import apply_import  # noqa: PLC0415
         import import_inventory as _inv
 
@@ -1558,6 +1762,7 @@ class TestApplyImportDoesNotPostWarnRows:
             "description": None, "condition": "GOOD",
             "sku": "TEST-0001", "low_stock_threshold": 2.0, "unit_price": 9.99,
             "unit": None, "sku_source": "provided",
+            "requires_request": True, "requires_request_source": "provided",
         }
 
         posted_bodies: list[dict] = []
@@ -1585,6 +1790,7 @@ class TestApplyImportDoesNotPostWarnRows:
         assert body.get("sku") == "TEST-0001"
         assert body.get("low_stock_threshold") == 2.0
         assert body.get("unit_price") == 9.99
+        assert body.get("requires_request") is True
 
     def test_apply_import_omits_none_optional_fields(self):
         """None values for optional fields must not appear in the item POST body."""
@@ -1600,6 +1806,7 @@ class TestApplyImportDoesNotPostWarnRows:
             "description": None, "condition": "GOOD",
             "sku": "TEST-0002", "low_stock_threshold": None, "unit_price": None,
             "unit": None, "sku_source": "provided",
+            "requires_request": False, "requires_request_source": "provided",
         }
 
         posted_bodies: list[dict] = []
@@ -1626,6 +1833,7 @@ class TestApplyImportDoesNotPostWarnRows:
         body = item_post["body"]
         assert "low_stock_threshold" not in body
         assert "unit_price" not in body
+        assert body["requires_request"] is False
 
     def test_apply_import_creates_new_bin_with_bin_number(self):
         from import_inventory import apply_import  # noqa: PLC0415

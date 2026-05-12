@@ -20,6 +20,7 @@ class ItemBase(BaseModel):
     sku: Optional[str] = None
     condition: str = "GOOD"
     is_consumable: bool = False
+    requires_request: bool = False
     unit_price: Optional[float] = None
     low_stock_threshold: Optional[float] = None
 
@@ -51,6 +52,7 @@ class ItemUpdate(BaseModel):
     condition: Optional[str] = None
     is_active: Optional[bool] = None
     is_consumable: Optional[bool] = None
+    requires_request: Optional[bool] = None
     unit_price: Optional[float] = None
     low_stock_threshold: Optional[float] = None
 

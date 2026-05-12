@@ -64,6 +64,8 @@ class Item(Base):
     # Consumable vs non-consumable
     is_consumable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    requires_request: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # Current unit price (mutable — PurchaseRecord stores historical pricing)
     unit_price: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
 

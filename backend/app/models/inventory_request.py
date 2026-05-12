@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from app.models.user import User
 
 
-class RequestStatus(str, Enum):
+class Status(str, Enum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     DENIED = "DENIED"

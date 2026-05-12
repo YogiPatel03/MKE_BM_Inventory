@@ -162,6 +162,9 @@ export function InventoryListPage() {
                       >
                         {item.name}
                       </Link>
+                      {item.requiresRequest && (
+                        <span className="badge-blue text-xs mt-1 sm:hidden">Request required</span>
+                      )}
                       {/* Show location inline on mobile */}
                       <p className="sm:hidden text-xs text-slate-400 mt-0.5">{locationLabel}</p>
                     </td>
@@ -190,6 +193,9 @@ export function InventoryListPage() {
                         <span className="badge-yellow">Consumable</span>
                       ) : (
                         <span className="badge-slate">Standard</span>
+                      )}
+                      {item.requiresRequest && (
+                        <span className="badge-blue ml-2">Request required</span>
                       )}
                     </td>
                   </tr>

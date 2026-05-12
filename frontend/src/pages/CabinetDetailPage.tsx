@@ -85,7 +85,18 @@ function EditCabinetModal({ cabinet, onClose }: { cabinet: Cabinet; onClose: () 
   );
 }
 
-function ItemRow({ item, requiresFullBinCheckout }: { item: Item; inBin?: boolean; requiresFullBinCheckout?: boolean }) {
+function ItemRow({
+  item,
+  canBypassRequiresRequest,
+  onRequestItem,
+  requiresFullBinCheckout,
+}: {
+  item: Item;
+  inBin?: boolean;
+  canBypassRequiresRequest: boolean;
+  onRequestItem: (itemId: number) => void;
+  requiresFullBinCheckout?: boolean;
+}) {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [markUsedOpen, setMarkUsedOpen] = useState(false);
 
@@ -95,6 +106,7 @@ function ItemRow({ item, requiresFullBinCheckout }: { item: Item; inBin?: boolea
       : item.quantityAvailable < item.quantityTotal
       ? "badge-yellow"
       : "badge-green";
+  const mustRequest = item.requiresRequest && !canBypassRequiresRequest;
 
   return (
     <div className="flex items-center justify-between py-3 px-4 hover:bg-slate-50 transition-colors">
@@ -113,6 +125,9 @@ function ItemRow({ item, requiresFullBinCheckout }: { item: Item; inBin?: boolea
           {item.isConsumable && (
             <span className="text-xs text-amber-600 font-medium">consumable</span>
           )}
+          {item.requiresRequest && (
+            <span className="badge-blue text-xs">Request required</span>
+          )}
         </div>
       </div>
       <div className="flex items-center gap-3 flex-shrink-0 ml-4">
@@ -130,13 +145,25 @@ function ItemRow({ item, requiresFullBinCheckout }: { item: Item; inBin?: boolea
           </button>
         )}
         {/* Non-consumable: individual checkout blocked when bin requires full checkout */}
-        {!item.isConsumable && item.quantityAvailable > 0 && !requiresFullBinCheckout && (
+        {!item.isConsumable && item.quantityAvailable > 0 && !requiresFullBinCheckout && !mustRequest && (
           <button
             onClick={() => setCheckoutOpen(true)}
             className="btn-primary text-xs py-1 px-3"
           >
             Check out
           </button>
+        )}
+        {!item.isConsumable && item.quantityAvailable > 0 && !requiresFullBinCheckout && mustRequest && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">This item must be requested before checkout.</span>
+            <button
+              onClick={() => onRequestItem(item.id)}
+              className="btn-primary text-xs py-1 px-3"
+            >
+              <Inbox className="h-3.5 w-3.5" />
+              Request item
+            </button>
+          </div>
         )}
         {!item.isConsumable && requiresFullBinCheckout && (
           <span className="text-xs text-slate-400 italic">Full bin only</span>
@@ -158,12 +185,25 @@ interface BinSectionProps {
   cabinetId: number;
   canManage: boolean;
   canProcess: boolean;
+  canBypassRequiresRequest: boolean;
   activeBinTxn: BinTransaction | undefined;
   onBinTxnChange: () => void;
   onRequestBin: (binId: number) => void;
+  onRequestItem: (itemId: number) => void;
 }
 
-function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn, onBinTxnChange, onRequestBin }: BinSectionProps) {
+function BinSection({
+  bin,
+  items,
+  cabinetId,
+  canManage,
+  canProcess,
+  canBypassRequiresRequest,
+  activeBinTxn,
+  onBinTxnChange,
+  onRequestBin,
+  onRequestItem,
+}: BinSectionProps) {
   const qc = useQueryClient();
   const [moveOpen, setMoveOpen] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
@@ -322,7 +362,14 @@ function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn
           <p className="py-4 px-4 text-sm text-slate-400">No items in this bin</p>
         ) : (
           items.map((item) => (
-            <ItemRow key={item.id} item={item} inBin={!item.isConsumable} requiresFullBinCheckout={bin.requiresFullBinCheckout} />
+            <ItemRow
+              key={item.id}
+              item={item}
+              inBin={!item.isConsumable}
+              canBypassRequiresRequest={canBypassRequiresRequest}
+              requiresFullBinCheckout={bin.requiresFullBinCheckout}
+              onRequestItem={onRequestItem}
+            />
           ))
         )}
       </div>
@@ -347,6 +394,7 @@ export function CabinetDetailPage() {
   const user = useAuthStore((s) => s.user);
   const canManage = user?.role.canManageInventory ?? false;
   const canProcess = user?.role.canProcessAnyTransaction || user?.role.canManageUsers || false;
+  const canBypassRequiresRequest = user?.role.name === "ADMIN" || user?.role.name === "COORDINATOR";
   const navigate = useNavigate();
   useQueryClient();
 
@@ -364,6 +412,7 @@ export function CabinetDetailPage() {
   const [itemModalOpen, setItemModalOpen] = useState(false);
   const [editCabinetOpen, setEditCabinetOpen] = useState(false);
   const [requestingBinId, setRequestingBinId] = useState<number | null>(null);
+  const [requestingItemId, setRequestingItemId] = useState<number | null>(null);
 
   const { data: allItems = [] } = useQuery({
     queryKey: ["items", "cabinet", cabinetId],
@@ -377,12 +426,24 @@ export function CabinetDetailPage() {
   });
 
   const handleRequestBin = (binId: number) => setRequestingBinId(binId);
+  const handleRequestItem = (itemId: number) => setRequestingItemId(itemId);
 
   const doRequestBin = async (reason: string) => {
     const binId = requestingBinId!;
     setRequestingBinId(null);
     try {
       await submitRequest({ binId, reason: reason || undefined });
+      navigate("/requests");
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? "Failed to submit request");
+    }
+  };
+
+  const doRequestItem = async (reason: string) => {
+    const itemId = requestingItemId!;
+    setRequestingItemId(null);
+    try {
+      await submitRequest({ itemId, quantityRequested: 1, reason: reason || undefined });
       navigate("/requests");
     } catch (e: any) {
       toast.error(e?.response?.data?.detail ?? "Failed to submit request");
@@ -458,7 +519,13 @@ export function CabinetDetailPage() {
           </h2>
           <div className="card overflow-hidden divide-y divide-slate-100">
             {directItems.map((item) => (
-              <ItemRow key={item.id} item={item} inBin={false} />
+              <ItemRow
+                key={item.id}
+                item={item}
+                inBin={false}
+                canBypassRequiresRequest={canBypassRequiresRequest}
+                onRequestItem={handleRequestItem}
+              />
             ))}
           </div>
         </div>
@@ -473,9 +540,11 @@ export function CabinetDetailPage() {
           cabinetId={cabinetId}
           canManage={canManage}
           canProcess={canProcess}
+          canBypassRequiresRequest={canBypassRequiresRequest}
           activeBinTxn={activeBinTxnMap[bin.id]}
           onBinTxnChange={() => refetchBinTxns()}
           onRequestBin={handleRequestBin}
+          onRequestItem={handleRequestItem}
         />
       ))}
 
@@ -497,6 +566,16 @@ export function CabinetDetailPage() {
           confirmLabel="Submit request"
           onConfirm={doRequestBin}
           onCancel={() => setRequestingBinId(null)}
+        />
+      )}
+      {requestingItemId !== null && (
+        <PromptModal
+          title="Request Item"
+          label="Reason for request"
+          placeholder="e.g. needed for event setup"
+          confirmLabel="Submit request"
+          onConfirm={doRequestItem}
+          onCancel={() => setRequestingItemId(null)}
         />
       )}
     </div>

@@ -58,6 +58,8 @@ interface SearchResult {
   to: string;
   badge?: string;
   badgeColor?: string;
+  secondaryBadge?: string;
+  secondaryBadgeColor?: string;
 }
 
 function formatQty(n: number): string {
@@ -179,6 +181,16 @@ function ResultCard({ result }: { result: SearchResult }) {
               {result.badge}
             </span>
           )}
+          {result.secondaryBadge && (
+            <span
+              className={clsx(
+                "text-xs px-1.5 py-0.5 rounded-full font-medium",
+                result.secondaryBadgeColor ?? "bg-slate-100 text-slate-600"
+              )}
+            >
+              {result.secondaryBadge}
+            </span>
+          )}
         </div>
         <p className="text-xs text-slate-500 truncate mt-0.5">{result.sublabel}</p>
       </div>
@@ -291,6 +303,8 @@ export function InventoryPage() {
           to: `/inventory/items/${item.id}`,
           badge,
           badgeColor,
+          secondaryBadge: item.requiresRequest ? "Request required" : undefined,
+          secondaryBadgeColor: item.requiresRequest ? "bg-blue-100 text-blue-700" : undefined,
         });
       }
     }

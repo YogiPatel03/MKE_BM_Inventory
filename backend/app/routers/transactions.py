@@ -83,6 +83,7 @@ async def checkout(
             "You can only check out items for yourself unless you have coordinator permissions",
         )
 
+    bypass = current_user.role.can_process_any_transaction or current_user.role.can_manage_users
     transaction = await checkout_item(
         db,
         item_id=body.item_id,
@@ -91,6 +92,7 @@ async def checkout(
         quantity=body.quantity,
         due_at=body.due_at,
         notes=body.notes,
+        bypass_requires_request=bypass,
     )
     # Auto-create return task on the borrower's group checklist
     from sqlalchemy import select as sa_select

@@ -99,6 +99,7 @@ export interface Item {
   condition: ItemCondition;
   isActive: boolean;
   isConsumable: boolean;
+  requiresRequest: boolean;
   unitPrice: number | null;
   qrCodeToken: string | null;
   lowStockThreshold: number | null;
