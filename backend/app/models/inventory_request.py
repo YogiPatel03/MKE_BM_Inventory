@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from app.models.user import User
 
 
-class Status(str, Enum):
+class RequestStatus(str, Enum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     DENIED = "DENIED"
@@ -53,7 +53,7 @@ class InventoryRequest(Base):
 
     quantity_requested: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=1)
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=RequestStatus.PENDING, index=True
+        String(20), nullable=False, default=RequestStatus.PENDING.value, index=True
     )
 
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
