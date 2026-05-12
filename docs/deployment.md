@@ -66,6 +66,8 @@
 5. Copy the Vercel URL (e.g. `https://cabinet-inventory.vercel.app`)
 6. Update `FRONTEND_URL` in Render environment variables
 
+**SPA routing note:** This is a Vite + React app using `BrowserRouter` (browser-history routing). Vercel must rewrite all unmatched paths to `index.html` so React Router can handle client-side routes like `/inventory`, `/dashboard`, etc. The rewrite config lives at `frontend/vercel.json` — it must be inside `frontend/` because that is the Vercel Root Directory. After any change to `vercel.json`, Vercel must redeploy. Manual QA: open a deep route (e.g. `/inventory`) directly in a new tab and refresh — the app should load, not a Vercel 404.
+
 ---
 
 ## 5. GitHub Secrets (for GitHub Actions CI/CD)
