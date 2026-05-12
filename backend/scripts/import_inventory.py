@@ -218,6 +218,10 @@ class InventoryCache:
         self.cabinets: dict[tuple[int, str], int] = {}
         # (cabinet_id, bin_label_casefold) → id
         self.bins: dict[tuple[int, str], int] = {}
+        # bin_number_casefold → existing or planned bin metadata
+        self.bins_by_number: dict[str, dict] = {}
+        # bin id → existing bin metadata
+        self.bin_records_by_id: dict[int, dict] = {}
         # (cabinet_id, bin_id_or_none, item_name_casefold) → dict (existing item)
         self.items: dict[tuple[int, Optional[int], str], dict] = {}
         # uppercase SKU → True (for existing-SKU conflict detection)
@@ -241,6 +245,9 @@ class InventoryCache:
             for b in _api_get(client, "/api/bins", params={"cabinet_id": cab_id}):
                 key = (b["cabinet_id"], normalize_name(b["label"]))
                 self.bins[key] = b["id"]
+                self.bin_records_by_id[b["id"]] = b
+                if b.get("bin_number"):
+                    self.bins_by_number[normalize_name(b["bin_number"])] = b
         print(f"{len(self.bins)} found")
 
         print("  Fetching items …", end=" ", flush=True)
@@ -286,28 +293,71 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
         col_header = header_map.get(key)
         return row.get(col_header, default).strip() if col_header else default
 
-    # Pre-scan: aggregate BFCO explicit values per bin identity order-independently.
-    # key: (room_casefold, cab_casefold, bin_casefold)
+    # Pre-scan: aggregate BFCO explicit values and validate bin-number identity
+    # order-independently before planning creates. Bin number is the stable
+    # physical-bin code; bin label remains the human-readable name.
+    # BFCO key: (room_casefold, cab_casefold, shelf_casefold, bin_casefold, bin_number_casefold)
     # val: {"value": bool, "has_conflict": bool, "first_value": bool, "conflict_value": bool}
     _bin_bfco_prescan: dict[tuple, dict] = {}
+    _bin_number_identity: dict[str, tuple[str, str, str, str]] = {}
+    _conflicting_bin_numbers: dict[str, tuple[tuple[str, str, str, str], tuple[str, str, str, str]]] = {}
+    _bin_label_number: dict[tuple[str, str, str, str], str] = {}
+    _conflicting_bin_labels: dict[tuple[str, str, str, str], tuple[str, str]] = {}
     for _ps_idx, _ps_row in enumerate(rows, start=2):
         _ps_bin = get_col(_ps_row, "bin")
         _ps_room = get_col(_ps_row, "room")
         _ps_cab = get_col(_ps_row, "cabinet")
+        _ps_shelf = get_col(_ps_row, "shelf_code")
+        _ps_bin_number = get_col(_ps_row, "bin_number")
         if is_blank_placeholder(_ps_bin):
             _ps_bin = ""
         if is_blank_placeholder(_ps_room):
             _ps_room = ""
         if is_blank_placeholder(_ps_cab):
             _ps_cab = ""
+        if is_blank_placeholder(_ps_shelf):
+            _ps_shelf = ""
+        if is_blank_placeholder(_ps_bin_number):
+            _ps_bin_number = ""
         if not _ps_bin or not _ps_room or not _ps_cab:
             continue
+        if _ps_bin_number:
+            _ps_identity = (
+                _ps_room.casefold(),
+                _ps_cab.casefold(),
+                _ps_shelf.casefold(),
+                _ps_bin.casefold(),
+            )
+            _ps_number_key = _ps_bin_number.casefold()
+            if _ps_number_key in _bin_number_identity and _bin_number_identity[_ps_number_key] != _ps_identity:
+                _conflicting_bin_numbers[_ps_number_key] = (
+                    _bin_number_identity[_ps_number_key],
+                    _ps_identity,
+                )
+            else:
+                _bin_number_identity[_ps_number_key] = _ps_identity
+
+            _ps_label_key = _ps_identity
+            if _ps_label_key in _bin_label_number and _bin_label_number[_ps_label_key] != _ps_number_key:
+                _conflicting_bin_labels[_ps_label_key] = (
+                    _bin_label_number[_ps_label_key],
+                    _ps_number_key,
+                )
+            else:
+                _bin_label_number[_ps_label_key] = _ps_number_key
+
         _ps_val, _ps_explicit, _ps_err = parse_bin_requires_full_checkout(
             get_col(_ps_row, "bin_requires_full_checkout")
         )
         if _ps_err or not _ps_explicit:
             continue
-        _ps_key = (_ps_room.casefold(), _ps_cab.casefold(), _ps_bin.casefold())
+        _ps_key = (
+            _ps_room.casefold(),
+            _ps_cab.casefold(),
+            _ps_shelf.casefold(),
+            _ps_bin.casefold(),
+            _ps_bin_number.casefold(),
+        )
         if _ps_key not in _bin_bfco_prescan:
             _bin_bfco_prescan[_ps_key] = {
                 "value": _ps_val, "has_conflict": False, "first_value": _ps_val,
@@ -325,6 +375,8 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
         quantity_raw = get_col(row, "quantity")
         cabinet_name = get_col(row, "cabinet")
         bin_label = get_col(row, "bin")
+        shelf_code = get_col(row, "shelf_code")
+        bin_number = get_col(row, "bin_number")
         consumable_raw = get_col(row, "consumable")
         notes_raw = get_col(row, "notes")
         unit_raw = get_col(row, "unit")
@@ -346,6 +398,12 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
             item_name = ""
         if is_blank_placeholder(bin_label):
             bin_label = ""
+        if is_blank_placeholder(shelf_code):
+            shelf_code = ""
+        if is_blank_placeholder(bin_number):
+            bin_number = ""
+        if bin_number:
+            bin_number = bin_number.upper()
         if is_blank_placeholder(room_name):
             room_name = ""
         if is_blank_placeholder(cabinet_name):
@@ -369,7 +427,57 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
             results.append(rr)
             continue
 
-        rr.location = {"room": room_name, "cabinet": cabinet_name, "bin": bin_label}
+        rr.location = {
+            "room": room_name,
+            "cabinet": cabinet_name,
+            "bin": bin_label,
+            "shelf_code": shelf_code,
+            "bin_number": bin_number,
+        }
+
+        if bin_label and not bin_number:
+            rr.errors.append(
+                f"Bin Number is required for bin '{bin_label}' — row skipped"
+            )
+            rr.action = "warn"
+            results.append(rr)
+            continue
+
+        if bin_number and not bin_label:
+            rr.errors.append(
+                f"Bin label is required when Bin Number '{bin_number}' is provided — row skipped"
+            )
+            rr.action = "warn"
+            results.append(rr)
+            continue
+
+        bin_number_key = bin_number.casefold() if bin_number else ""
+        bin_identity_key = (
+            room_name.casefold(),
+            cabinet_name.casefold(),
+            shelf_code.casefold(),
+            bin_label.casefold(),
+        )
+
+        if bin_number_key in _conflicting_bin_numbers:
+            first, second = _conflicting_bin_numbers[bin_number_key]
+            rr.errors.append(
+                f"Bin Number '{bin_number}' maps to conflicting bins/locations: "
+                f"{first} vs {second} — fix before importing"
+            )
+            rr.action = "warn"
+            results.append(rr)
+            continue
+
+        if bin_identity_key in _conflicting_bin_labels:
+            first_number, second_number = _conflicting_bin_labels[bin_identity_key]
+            rr.errors.append(
+                f"Bin '{bin_label}' in this room/cabinet/shelf maps to multiple "
+                f"Bin Numbers: {first_number} vs {second_number} — fix before importing"
+            )
+            rr.action = "warn"
+            results.append(rr)
+            continue
 
         # --- Quantity ---------------------------------------------------
         qty = parse_quantity(quantity_raw)
@@ -474,7 +582,13 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
         resolved_bfco_value: bool = False
         resolved_bfco_explicit: bool = False
         if bin_label:
-            bfco_key = (room_key, cabinet_name.casefold(), bin_label.casefold())
+            bfco_key = (
+                room_key,
+                cabinet_name.casefold(),
+                shelf_code.casefold(),
+                bin_label.casefold(),
+                bin_number_key,
+            )
             prescan_entry = _bin_bfco_prescan.get(bfco_key)
 
             if prescan_entry and prescan_entry["has_conflict"]:
@@ -491,21 +605,51 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
             resolved_bfco_value = prescan_entry["value"] if prescan_entry else False
             resolved_bfco_explicit = prescan_entry is not None
 
-            bin_key_tuple = (cabinet_id_or_sentinel, bin_label.casefold())
-            if bin_key_tuple not in cache.bins:
-                tb_key = (room_key, cabinet_name.casefold(), bin_label.casefold())
-                if tb_key not in _bins_to_create:
-                    _bins_to_create[tb_key] = {
-                        "label": bin_label,
-                        "cabinet_sentinel": cabinet_id_or_sentinel,
-                        "requires_full_bin_checkout": resolved_bfco_value,
-                    }
-                cache.bins[bin_key_tuple] = f"NEW:{bin_label}"  # type: ignore[assignment]
+            bins_by_number = getattr(cache, "bins_by_number", {})
+            bin_records_by_id = getattr(cache, "bin_records_by_id", {})
+            bin_number_record = bins_by_number.get(bin_number_key)
+            if bin_number_record:
+                record_id = bin_number_record.get("id")
+                record_cabinet_id = bin_number_record.get("cabinet_id")
+                record_label = bin_number_record.get("label", "")
+                if record_cabinet_id != cabinet_id_or_sentinel or normalize_name(record_label) != normalize_name(bin_label):
+                    rr.errors.append(
+                        f"Bin Number '{bin_number}' already belongs to "
+                        f"'{record_label}' in cabinet {record_cabinet_id}; "
+                        f"cannot also mean '{bin_label}' in this location"
+                    )
+                    rr.action = "warn"
+                    results.append(rr)
+                    continue
+                bin_id_or_sentinel = record_id
+                if isinstance(record_id, int):
+                    existing_bin_id = record_id
             else:
-                raw_bin_id = cache.bins[bin_key_tuple]
+                label_key_tuple = (cabinet_id_or_sentinel, bin_label.casefold())
+                raw_bin_id = cache.bins.get(label_key_tuple)
                 if isinstance(raw_bin_id, int):
+                    existing_record = bin_records_by_id.get(raw_bin_id, {})
+                    existing_number = existing_record.get("bin_number")
+                    if existing_number and normalize_name(existing_number) != bin_number_key:
+                        rr.errors.append(
+                            f"Existing bin '{bin_label}' already has Bin Number "
+                            f"'{existing_number}', not '{bin_number}' — row skipped"
+                        )
+                        rr.action = "warn"
+                        results.append(rr)
+                        continue
                     existing_bin_id = raw_bin_id
-            bin_id_or_sentinel = cache.bins[bin_key_tuple]
+                    bin_id_or_sentinel = raw_bin_id
+                else:
+                    bin_id_or_sentinel = f"NEW:{bin_number}"
+
+                bins_by_number[bin_number_key] = {
+                    "id": bin_id_or_sentinel,
+                    "cabinet_id": cabinet_id_or_sentinel,
+                    "label": bin_label,
+                    "bin_number": bin_number,
+                }
+                cache.bins[label_key_tuple] = bin_id_or_sentinel  # type: ignore[index,assignment]
 
         # --- Duplicate detection (name-based) ----------------------------
         item_key = (
@@ -530,7 +674,7 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
         sku_value: Optional[str] = None
         sku_source: str = "none"
 
-        raw_sku = sku_raw.strip() if sku_raw else ""
+        raw_sku = sku_raw.strip().upper() if sku_raw else ""
         if raw_sku and not is_blank_placeholder(raw_sku):
             # Provided SKU — check for intra-CSV and existing-backend conflicts
             upper_sku = raw_sku.upper()
@@ -554,12 +698,12 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
             cache.skus.add(upper_sku)
         else:
             # Blank SKU — generate one
-            prefix = room_sku_prefix(room_name)
+            prefix = f"{room_sku_prefix(room_name)}{cabinet_name.casefold()}"
             counter = _sku_counters.get(prefix, 0) + 1
-            candidate = generate_sku(room_name, counter)
+            candidate = generate_sku(room_name, counter, cabinet_name)
             while candidate.upper() in cache.skus or candidate.upper() in _csv_skus:
                 counter += 1
-                candidate = generate_sku(room_name, counter)
+                candidate = generate_sku(room_name, counter, cabinet_name)
             _sku_counters[prefix] = counter
             sku_value = candidate
             sku_source = "generated"
@@ -571,6 +715,8 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
             "_room_name": room_name,
             "_cabinet_name": cabinet_name,
             "_bin_label": bin_label or None,
+            "_bin_number": bin_number or None,
+            "_shelf_code": shelf_code or None,
             "_bfco_explicit": resolved_bfco_explicit,
             "_existing_bin_id": existing_bin_id,
             "name": item_name,
@@ -584,6 +730,7 @@ def process_rows(rows: list[dict], header_map: dict[str, str], cache: InventoryC
             "sku": sku_value,
             "sku_source": sku_source,
             "bin_requires_full_checkout": resolved_bfco_value,
+            "bin_number": bin_number or None,
         }
         rr.action = "create"
         results.append(rr)
@@ -613,7 +760,10 @@ def print_summary(results: list[RowResult], dry_run: bool, unknown_col_warnings:
         cabinets_to_create.add(f"{r.location.get('room', '')} / {r.location.get('cabinet', '')}")
         b = r.location.get("bin", "—")
         if b and b != "—":
-            bins_to_create.add(f"{r.location.get('cabinet', '')} / {b}")
+            bins_to_create.add(
+                f"{r.location.get('cabinet', '')} / {b} "
+                f"({r.location.get('bin_number', '')})"
+            )
         for w in r.warnings:
             if "consumable" in w.lower():
                 unknown_consumable_rows.append(r)
@@ -692,22 +842,27 @@ def apply_import(results: list[RowResult], client: Any, cache: InventoryCache) -
 
     real_room_ids: dict[str, int] = {}
     real_cabinet_ids: dict[tuple, int] = {}
-    real_bin_ids: dict[tuple, int] = {}
+    real_bin_ids: dict[str, int] = {}
 
     # Phase 1: PATCH existing bins before any item creation.
     # Collect from payloads (already resolved order-independently by process_rows).
     # Failure here propagates as RuntimeError, aborting item creation entirely.
-    _pending_bin_patches: dict[int, bool] = {}
+    _pending_bin_patches: dict[int, dict[str, Any]] = {}
     for r in creates:
         p_tmp = r.item_payload
-        if p_tmp.get("_bfco_explicit") and p_tmp.get("_existing_bin_id"):
+        if p_tmp.get("_existing_bin_id"):
             bin_id_tmp: int = p_tmp["_existing_bin_id"]
-            if bin_id_tmp not in _pending_bin_patches:
-                _pending_bin_patches[bin_id_tmp] = p_tmp["bin_requires_full_checkout"]
+            patch_body = _pending_bin_patches.setdefault(bin_id_tmp, {})
+            if p_tmp.get("_bfco_explicit"):
+                patch_body["requires_full_bin_checkout"] = p_tmp["bin_requires_full_checkout"]
+            if p_tmp.get("_bin_number"):
+                patch_body["bin_number"] = p_tmp["_bin_number"]
 
-    for bin_id_to_patch, bfco_val in _pending_bin_patches.items():
-        _api_patch(client, f"/api/bins/{bin_id_to_patch}", {"requires_full_bin_checkout": bfco_val})
-        print(f"  Updated bin:     id={bin_id_to_patch} requires_full_bin_checkout={bfco_val}")
+    for bin_id_to_patch, patch_body in _pending_bin_patches.items():
+        if not patch_body:
+            continue
+        _api_patch(client, f"/api/bins/{bin_id_to_patch}", patch_body)
+        print(f"  Updated bin:     id={bin_id_to_patch} {patch_body}")
 
     # Phase 2: Create rooms, cabinets, new bins, and items.
     for r in creates:
@@ -715,6 +870,7 @@ def apply_import(results: list[RowResult], client: Any, cache: InventoryCache) -
         room_name: str = p["_room_name"]
         cabinet_name: str = p["_cabinet_name"]
         bin_label: Optional[str] = p["_bin_label"]
+        bin_number: Optional[str] = p.get("_bin_number")
 
         # --- Room -------------------------------------------------------
         room_key = room_name.casefold()
@@ -758,10 +914,13 @@ def apply_import(results: list[RowResult], client: Any, cache: InventoryCache) -
         # --- Bin (optional) --------------------------------------------
         bin_id: Optional[int] = None
         if bin_label:
-            bin_tuple = (cab_tuple, bin_label.casefold())
+            bin_tuple = (bin_number or bin_label).casefold()
             bfco_value: bool = p.get("bin_requires_full_checkout", False)
             if bin_tuple not in real_bin_ids:
-                existing_bin = cache.bins.get((cabinet_id, bin_label.casefold()))
+                existing_record = getattr(cache, "bins_by_number", {}).get(
+                    normalize_name(bin_number or "")
+                )
+                existing_bin = existing_record.get("id") if existing_record else None
                 if isinstance(existing_bin, int):
                     real_bin_ids[bin_tuple] = existing_bin
                     # PATCH already applied in Phase 1 — no scheduling needed
@@ -769,11 +928,15 @@ def apply_import(results: list[RowResult], client: Any, cache: InventoryCache) -
                     try:
                         created_bin = _api_post(client, "/api/bins", {
                             "label": bin_label,
+                            "bin_number": bin_number,
                             "cabinet_id": cabinet_id,
                             "requires_full_bin_checkout": bfco_value,
                         })
                         real_bin_ids[bin_tuple] = created_bin["id"]
-                        print(f"  Created bin:     {bin_label} (id={created_bin['id']}, cabinet={cabinet_name})")
+                        print(
+                            f"  Created bin:     {bin_label} "
+                            f"({bin_number}, id={created_bin['id']}, cabinet={cabinet_name})"
+                        )
                     except Exception as exc:
                         r.errors.append(f"Failed to create bin '{bin_label}': {exc}")
                         r.action = "warn"
@@ -853,6 +1016,8 @@ def write_report(results: list[RowResult], out_path: Path) -> None:
             "room": r.location.get("room", ""),
             "cabinet": r.location.get("cabinet", ""),
             "bin": r.location.get("bin", ""),
+            "shelf_code": r.location.get("shelf_code", ""),
+            "bin_number": p.get("bin_number", "") or r.location.get("bin_number", ""),
             "quantity_total": p.get("quantity_total", ""),
             "unit": p.get("unit", ""),
             "consumable": p.get("is_consumable", ""),

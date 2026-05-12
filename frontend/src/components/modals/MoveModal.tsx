@@ -156,7 +156,7 @@ export function MoveModal({
                 <option value="">No bin (direct in cabinet)</option>
                 {bins.map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.label}{b.locationNote ? ` — ${b.locationNote}` : ""}
+                    {b.label}{b.binNumber ? ` (${b.binNumber})` : ""}{b.locationNote ? ` — ${b.locationNote}` : ""}
                   </option>
                 ))}
               </select>

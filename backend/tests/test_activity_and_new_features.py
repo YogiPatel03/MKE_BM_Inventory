@@ -68,6 +68,7 @@ async def _setup_cabinet_and_consumable(client, db, headers) -> tuple[dict, dict
             "quantity_total": 20,
             "cabinet_id": cab["id"],
             "is_consumable": True,
+            "sku": "BAT1",
             "unit_price": 2.50,
         },
         headers=headers,
@@ -89,7 +90,7 @@ async def test_item_create_logs_activity(client: AsyncClient, db: AsyncSession):
     cab = (await client.post("/api/cabinets", json={"name": "Cab-Activity", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
-        json={"name": "Widget", "quantity_total": 5, "cabinet_id": cab["id"]},
+        json={"name": "Widget", "quantity_total": 5, "cabinet_id": cab["id"], "sku": "WID1"},
         headers=headers,
     )).json()
 
@@ -267,7 +268,7 @@ async def test_low_stock_threshold_default_ten_percent(client: AsyncClient, db: 
     # 100 total, no explicit threshold → dynamic threshold = max(1, 100 // 10) = 10
     item = (await client.post(
         "/api/items",
-        json={"name": "Widgets", "quantity_total": 100, "cabinet_id": cab["id"]},
+        json={"name": "Widgets", "quantity_total": 100, "cabinet_id": cab["id"], "sku": "WID100"},
         headers=headers,
     )).json()
 
@@ -303,7 +304,7 @@ async def test_low_stock_threshold_explicit(client: AsyncClient, db: AsyncSessio
     cab = (await client.post("/api/cabinets", json={"name": "Cab-Explicit", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
-        json={"name": "Bolts", "quantity_total": 100, "cabinet_id": cab["id"], "low_stock_threshold": 25},
+        json={"name": "Bolts", "quantity_total": 100, "cabinet_id": cab["id"], "sku": "BOLT1", "low_stock_threshold": 25},
         headers=headers,
     )).json()
 
@@ -330,7 +331,7 @@ async def test_out_of_stock_item_appears_in_report(client: AsyncClient, db: Asyn
     cab = (await client.post("/api/cabinets", json={"name": "Cab-OOS", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
-        json={"name": "Tape", "quantity_total": 5, "cabinet_id": cab["id"], "is_consumable": True},
+        json={"name": "Tape", "quantity_total": 5, "cabinet_id": cab["id"], "sku": "TAPE5", "is_consumable": True},
         headers=headers,
     )).json()
 
@@ -361,7 +362,7 @@ async def test_restock_me_auto_move_on_zero(client: AsyncClient, db: AsyncSessio
     cab = (await client.post("/api/cabinets", json={"name": "Main Cabinet", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
-        json={"name": "Gloves", "quantity_total": 2, "cabinet_id": cab["id"], "is_consumable": True},
+        json={"name": "Gloves", "quantity_total": 2, "cabinet_id": cab["id"], "sku": "GLOVE2", "is_consumable": True},
         headers=headers,
     )).json()
     item_id = item["id"]
@@ -404,7 +405,7 @@ async def test_restock_me_auto_restore_on_restock(client: AsyncClient, db: Async
     cab = (await client.post("/api/cabinets", json={"name": "Original Cabinet", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
-        json={"name": "Clips", "quantity_total": 3, "cabinet_id": cab["id"], "is_consumable": True},
+        json={"name": "Clips", "quantity_total": 3, "cabinet_id": cab["id"], "sku": "CLIP3", "is_consumable": True},
         headers=headers,
     )).json()
     item_id = item["id"]

@@ -50,10 +50,13 @@ export function InventoryListPage() {
     : allBins;
 
   const filtered = items.filter((item) => {
+    const bin = item.binId ? binMap[item.binId] : null;
     const matchSearch =
       !search ||
       item.name.toLowerCase().includes(search.toLowerCase()) ||
-      (item.sku?.toLowerCase().includes(search.toLowerCase()) ?? false);
+      (item.sku?.toLowerCase().includes(search.toLowerCase()) ?? false) ||
+      (bin?.label.toLowerCase().includes(search.toLowerCase()) ?? false) ||
+      (bin?.binNumber?.toLowerCase().includes(search.toLowerCase()) ?? false);
     const matchCabinet = !cabinetFilter || String(item.cabinetId) === cabinetFilter;
     const matchBin = !binFilter || String(item.binId) === binFilter;
     const matchStatus =
@@ -80,7 +83,7 @@ export function InventoryListPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Search name or SKU…"
+            placeholder="Search name, SKU, or Bin Number…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="input pl-9 w-full"
@@ -104,7 +107,7 @@ export function InventoryListPage() {
           <option value="">All bins</option>
           {filteredBinOptions.map((b) => (
             <option key={b.id} value={String(b.id)}>
-              {b.label}{b.locationNote ? ` — ${b.locationNote}` : ""}
+              {b.label}{b.binNumber ? ` (${b.binNumber})` : ""}{b.locationNote ? ` — ${b.locationNote}` : ""}
             </option>
           ))}
         </select>
@@ -147,7 +150,7 @@ export function InventoryListPage() {
                 const bin = item.binId ? binMap[item.binId] : null;
 
                 const locationLabel = bin
-                  ? `${cabinet?.name ?? `Cabinet ${item.cabinetId}`} / ${bin.label}`
+                  ? `${cabinet?.name ?? `Cabinet ${item.cabinetId}`} / ${bin.label}${bin.binNumber ? ` (${bin.binNumber})` : ""}`
                   : cabinet?.name ?? `Cabinet ${item.cabinetId}`;
 
                 return (

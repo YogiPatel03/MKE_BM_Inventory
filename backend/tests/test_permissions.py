@@ -119,7 +119,7 @@ async def test_user_cannot_create_item(client: AsyncClient, db: AsyncSession):
     token = await _login(client, "alice", "alicepass")
     r = await client.post(
         "/api/items",
-        json={"name": "Sneaky Item", "quantity_total": 1, "cabinet_id": item.cabinet_id},
+        json={"name": "Sneaky Item", "quantity_total": 1, "cabinet_id": item.cabinet_id, "sku": "SNEAKY1"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 403

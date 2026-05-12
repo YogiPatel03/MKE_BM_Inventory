@@ -105,7 +105,10 @@ function ItemRow({ item, requiresFullBinCheckout }: { item: Item; inBin?: boolea
         >
           {item.name}
         </Link>
-        {item.sku && <p className="text-xs text-slate-400">SKU: {item.sku}</p>}
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-400">
+          {item.sku && <span>SKU: {item.sku}</span>}
+          {item.binNumber && <span>Bin Number: {item.binNumber}</span>}
+        </div>
         <div className="flex items-center gap-2 mt-0.5">
           {item.isConsumable && (
             <span className="text-xs text-amber-600 font-medium">consumable</span>
@@ -203,9 +206,12 @@ function BinSection({ bin, items, cabinetId, canManage, canProcess, activeBinTxn
     <div className="space-y-2">
       {/* Bin header */}
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
           <FolderOpen className="h-4 w-4 text-slate-400" />
           <h2 className="text-sm font-semibold text-slate-700">{bin.label}</h2>
+          {bin.binNumber && (
+            <span className="text-xs font-medium text-slate-500">Bin Number: {bin.binNumber}</span>
+          )}
           {bin.locationNote && (
             <span className="text-xs text-slate-400">— {bin.locationNote}</span>
           )}

@@ -286,31 +286,40 @@ def parse_unit_price(raw: str) -> NumericResult:
 
 def room_sku_prefix(room_name: str) -> str:
     """
-    Convert a room name to an uppercase alphanumeric prefix (max 8 chars).
+    Convert a room name to the import SKU room abbreviation.
 
-    "Group 1 Tijori" → "GROUP1TI"
-    "Room A"         → "ROOMA"
-    ""               → "ITEM"
+    "Shishu Mandal" → "SM"
+    "Group 1"       → "G1"
+    "Room A"        → "RA"
+    ""              → "ITEM"
     """
     cleaned = re.sub(r"[^A-Za-z0-9\s]", "", room_name)
     words = cleaned.upper().split()
-    prefix = ""
-    for word in words:
-        remaining = 8 - len(prefix)
-        if remaining <= 0:
-            break
-        prefix += word[:remaining]
-    return prefix or "ITEM"
+    if not words:
+        return "ITEM"
+    if words[0] == "GROUP" and len(words) > 1:
+        return f"G{re.sub(r'[^0-9A-Z]', '', words[1])}"[:4]
+    if len(words) == 1:
+        return words[0][:4]
+    return "".join(word[0] for word in words if word)[:4] or "ITEM"
 
 
-def generate_sku(room_name: str, counter: int) -> str:
+def cabinet_sku_code(cabinet_name: str) -> str:
+    """Return the cabinet/tijori code segment for generated item SKUs."""
+    normalized = cabinet_name.casefold()
+    if "tijori" in normalized or normalized.startswith("t"):
+        return "T"
+    return "C"
+
+
+def generate_sku(room_name: str, counter: int, cabinet_name: str = "") -> str:
     """
-    Generate a deterministic, readable SKU from a room name and a counter.
+    Generate a deterministic item-level SKU from room, cabinet type, and counter.
 
-    Counter should start at 1 and increment until a unique value is found.
-    Example: generate_sku("Group 1 Tijori", 1) → "GROUP1TI-0001"
+    Counter should start at 1 and increment until a unique item SKU is found.
+    Example: generate_sku("Shishu Mandal", 1, "Cabinet") → "SMC1"
     """
-    return f"{room_sku_prefix(room_name)}-{counter:04d}"
+    return f"{room_sku_prefix(room_name)}{cabinet_sku_code(cabinet_name)}{counter}"
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +431,7 @@ REQUIRED_COLUMNS = {"name", "room", "quantity", "cabinet"}
 OPTIONAL_COLUMNS = {
     "bin", "consumable", "notes", "unit",
     "low_stock_threshold", "unit_price", "condition", "sku",
-    "bin_requires_full_checkout",
+    "bin_requires_full_checkout", "shelf_code", "bin_number",
 }
 
 # Map of normalised (casefold+strip) header → canonical key
@@ -454,6 +463,10 @@ _HEADER_ALIASES: dict[str, str] = {
     "bin if any": "bin",
     "tote": "bin",
     "container": "bin",
+    # shelf code
+    "shelf code": "shelf_code",
+    "shelf_code": "shelf_code",
+    "shelf letter": "shelf_code",
     # unit ("metric" kept as backward-compat alias)
     "unit": "unit",
     "metric": "unit",
@@ -477,6 +490,13 @@ _HEADER_ALIASES: dict[str, str] = {
     "condition": "condition",
     # sku
     "sku": "sku",
+    # bin number / code
+    "bin number": "bin_number",
+    "bin code": "bin_number",
+    "bin_number": "bin_number",
+    "bin_number / bin_code": "bin_number",
+    "bin number / bin code": "bin_number",
+    "bin #": "bin_number",
     # bin requires full checkout
     "bin requires full checkout": "bin_requires_full_checkout",
     "requires full bin checkout": "bin_requires_full_checkout",

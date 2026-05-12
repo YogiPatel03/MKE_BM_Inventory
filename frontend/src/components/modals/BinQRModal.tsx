@@ -13,6 +13,8 @@ export function BinQRModal({ bin, onClose }: BinQRModalProps) {
 
   // The QR code encodes the URL that the QR scan page uses
   const qrValue = `${window.location.origin}/qr/bin/${bin.id}`;
+  const displayName = `${bin.label}${bin.binNumber ? ` (${bin.binNumber})` : ""}`;
+  const fileName = (bin.binNumber || bin.label).replace(/\s+/g, "_");
 
   function getSvgElement(): SVGSVGElement | null {
     return containerRef.current?.querySelector("svg") ?? null;
@@ -27,7 +29,7 @@ export function BinQRModal({ bin, onClose }: BinQRModalProps) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `bin-${bin.id}-${bin.label.replace(/\s+/g, "_")}-qr.svg`;
+    a.download = `bin-${bin.id}-${fileName}-qr.svg`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -54,7 +56,7 @@ export function BinQRModal({ bin, onClose }: BinQRModalProps) {
       const pngUrl = canvas.toDataURL("image/png");
       const a = document.createElement("a");
       a.href = pngUrl;
-      a.download = `bin-${bin.id}-${bin.label.replace(/\s+/g, "_")}-qr.png`;
+      a.download = `bin-${bin.id}-${fileName}-qr.png`;
       a.click();
     };
     img.src = url;
@@ -71,7 +73,7 @@ export function BinQRModal({ bin, onClose }: BinQRModalProps) {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>QR Code — ${bin.label}</title>
+          <title>QR Code — ${displayName}</title>
           <style>
             body { margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: sans-serif; }
             h2 { margin-bottom: 12px; font-size: 18px; }
@@ -80,7 +82,7 @@ export function BinQRModal({ bin, onClose }: BinQRModalProps) {
           </style>
         </head>
         <body>
-          <h2>${bin.label}</h2>
+          <h2>${displayName}</h2>
           ${svgStr}
           <p>${qrValue}</p>
           <button onclick="window.print()">Print</button>
@@ -98,7 +100,7 @@ export function BinQRModal({ bin, onClose }: BinQRModalProps) {
         <div className="flex items-center justify-between p-4 border-b border-slate-100">
           <div>
             <h2 className="font-semibold text-slate-900">QR Code</h2>
-            <p className="text-xs text-slate-500 mt-0.5">{bin.label}</p>
+            <p className="text-xs text-slate-500 mt-0.5">{displayName}</p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             <X className="h-5 w-5" />

@@ -71,15 +71,19 @@ async def _setup(client: AsyncClient, db: AsyncSession, headers: dict):
     db.add(room)
     await db.flush()
     cab = (await client.post("/api/cabinets", json={"name": "Cabinet A", "room_id": room.id}, headers=headers)).json()
-    bin_ = (await client.post("/api/bins", json={"label": "B1", "cabinet_id": cab["id"]}, headers=headers)).json()
+    bin_ = (await client.post(
+        "/api/bins",
+        json={"label": "B1", "bin_number": "CABA1", "cabinet_id": cab["id"]},
+        headers=headers,
+    )).json()
     consumable = (await client.post(
         "/api/items",
-        json={"name": "Paper", "quantity_total": 100, "cabinet_id": cab["id"], "is_consumable": True, "unit_price": 0.20},
+        json={"name": "Paper", "quantity_total": 100, "cabinet_id": cab["id"], "sku": "PAPER1", "is_consumable": True, "unit_price": 0.20},
         headers=headers,
     )).json()
     standard = (await client.post(
         "/api/items",
-        json={"name": "Hammer", "quantity_total": 3, "cabinet_id": cab["id"], "is_consumable": False},
+        json={"name": "Hammer", "quantity_total": 3, "cabinet_id": cab["id"], "sku": "HAMMER1", "is_consumable": False},
         headers=headers,
     )).json()
     return cab, bin_, consumable, standard
@@ -170,10 +174,14 @@ async def test_cannot_individually_checkout_bin_item(client: AsyncClient, db: As
     await db.flush()
 
     cab = (await client.post("/api/cabinets", json={"name": "C", "room_id": room.id}, headers=headers)).json()
-    bin_ = (await client.post("/api/bins", json={"label": "B1", "cabinet_id": cab["id"]}, headers=headers)).json()
+    bin_ = (await client.post(
+        "/api/bins",
+        json={"label": "B1", "bin_number": "CB1", "cabinet_id": cab["id"]},
+        headers=headers,
+    )).json()
     item = (await client.post(
         "/api/items",
-        json={"name": "Widget", "quantity_total": 5, "cabinet_id": cab["id"], "bin_id": bin_["id"]},
+        json={"name": "Widget", "quantity_total": 5, "cabinet_id": cab["id"], "bin_id": bin_["id"], "sku": "WIDGET1"},
         headers=headers,
     )).json()
 
@@ -242,10 +250,14 @@ async def test_move_bin_cascades_to_items(client: AsyncClient, db: AsyncSession)
 
     cab_a = (await client.post("/api/cabinets", json={"name": "A", "room_id": room.id}, headers=headers)).json()
     cab_b = (await client.post("/api/cabinets", json={"name": "B", "room_id": room.id}, headers=headers)).json()
-    bin_ = (await client.post("/api/bins", json={"label": "B1", "cabinet_id": cab_a["id"]}, headers=headers)).json()
+    bin_ = (await client.post(
+        "/api/bins",
+        json={"label": "B1", "bin_number": "MOVEA1", "cabinet_id": cab_a["id"]},
+        headers=headers,
+    )).json()
     item = (await client.post(
         "/api/items",
-        json={"name": "Widget", "quantity_total": 2, "cabinet_id": cab_a["id"], "bin_id": bin_["id"]},
+        json={"name": "Widget", "quantity_total": 2, "cabinet_id": cab_a["id"], "bin_id": bin_["id"], "sku": "MOVEW1"},
         headers=headers,
     )).json()
 
@@ -277,7 +289,7 @@ async def test_approve_request_creates_transaction(client: AsyncClient, db: Asyn
     cab = (await client.post("/api/cabinets", json={"name": "C", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
-        json={"name": "Tape", "quantity_total": 10, "cabinet_id": cab["id"]},
+        json={"name": "Tape", "quantity_total": 10, "cabinet_id": cab["id"], "sku": "REQTAPE1"},
         headers=headers,
     )).json()
 
@@ -311,7 +323,7 @@ async def test_approve_request_insufficient_stock(client: AsyncClient, db: Async
     cab = (await client.post("/api/cabinets", json={"name": "C", "room_id": room.id}, headers=headers)).json()
     item = (await client.post(
         "/api/items",
-        json={"name": "Tape", "quantity_total": 2, "cabinet_id": cab["id"]},
+        json={"name": "Tape", "quantity_total": 2, "cabinet_id": cab["id"], "sku": "REQTAPE2"},
         headers=headers,
     )).json()
 

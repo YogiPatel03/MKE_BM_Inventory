@@ -226,7 +226,9 @@ export function ItemDetailPage() {
   if (!item) return <p className="text-slate-500">Item not found.</p>;
 
   const cabinetName = cabinets.find((c) => c.id === item.cabinetId)?.name ?? `Cabinet ${item.cabinetId}`;
-  const binLabel = item.binId ? (bins.find((b) => b.id === item.binId)?.label ?? `Bin ${item.binId}`) : null;
+  const currentBin = item.binId ? bins.find((b) => b.id === item.binId) : null;
+  const binLabel = item.binId ? (currentBin?.label ?? item.binLabel ?? `Bin ${item.binId}`) : null;
+  const binNumber = currentBin?.binNumber ?? item.binNumber;
 
   const conditionColor: Record<string, string> = {
     GOOD: "badge-green",
@@ -251,7 +253,10 @@ export function ItemDetailPage() {
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">{item.name}</h1>
-            {item.sku && <p className="text-xs text-slate-400 mt-0.5">SKU: {item.sku}</p>}
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-400 mt-0.5">
+              {item.sku && <span>SKU: {item.sku}</span>}
+              {binNumber && <span>Bin Number: {binNumber}</span>}
+            </div>
             {item.description && (
               <p className="text-sm text-slate-600 mt-2">{item.description}</p>
             )}
@@ -325,7 +330,7 @@ export function ItemDetailPage() {
       {/* Bin restriction notice */}
       {isInBin && !item.isConsumable && (
         <div className="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-600">
-          This item is inside <strong>{binLabel}</strong>. To check it out, check out the entire bin.
+          This item is inside <strong>{binLabel}{binNumber ? ` (${binNumber})` : ""}</strong>. To check it out, check out the entire bin.
         </div>
       )}
 
@@ -348,7 +353,7 @@ export function ItemDetailPage() {
           <p className="text-xs text-slate-500">Location</p>
           <p className="text-sm font-medium text-slate-700">
             {cabinetName}
-            {binLabel ? ` / ${binLabel}` : " (direct)"}
+            {binLabel ? ` / ${binLabel}${binNumber ? ` (${binNumber})` : ""}` : " (direct)"}
           </p>
         </div>
         <div>

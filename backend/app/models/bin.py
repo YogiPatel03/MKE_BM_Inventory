@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -25,10 +25,10 @@ class Bin(Base):
     """
 
     __tablename__ = "bins"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     cabinet_id: Mapped[int] = mapped_column(ForeignKey("cabinets.id"), nullable=False, index=True)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
+    bin_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     group_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     location_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -65,3 +65,12 @@ class Bin(Base):
 
     def __repr__(self) -> str:
         return f"<Bin {self.label} in cabinet {self.cabinet_id}>"
+
+
+Index(
+    "ux_bins_bin_number_lower",
+    func.lower(Bin.bin_number),
+    unique=True,
+    postgresql_where=Bin.bin_number.is_not(None),
+    sqlite_where=Bin.bin_number.is_not(None),
+)

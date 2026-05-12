@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -57,7 +57,7 @@ class Item(Base):
     cabinet_id: Mapped[int] = mapped_column(ForeignKey("cabinets.id"), nullable=False, index=True)
     bin_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bins.id"), nullable=True, index=True)
 
-    sku: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, unique=True)
+    sku: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     condition: Mapped[str] = mapped_column(String(20), nullable=False, default=ItemCondition.GOOD)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
@@ -109,3 +109,12 @@ class Item(Base):
 
     def __repr__(self) -> str:
         return f"<Item {self.name} ({self.quantity_available}/{self.quantity_total})>"
+
+
+Index(
+    "ux_items_sku_lower",
+    func.lower(Item.sku),
+    unique=True,
+    postgresql_where=Item.sku.is_not(None),
+    sqlite_where=Item.sku.is_not(None),
+)

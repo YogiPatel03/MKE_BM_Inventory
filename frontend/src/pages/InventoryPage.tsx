@@ -255,16 +255,19 @@ export function InventoryPage() {
         if (activeChip === "out_of_stock" && !isOutOfStock) continue;
 
         // Search filter
+        const bin = item.binId ? binMap[item.binId] : null;
         if (
           q &&
           !item.name.toLowerCase().includes(q) &&
-          !(item.sku?.toLowerCase().includes(q))
+          !(item.sku?.toLowerCase().includes(q)) &&
+          !(bin?.label.toLowerCase().includes(q)) &&
+          !(bin?.binNumber?.toLowerCase().includes(q))
         ) continue;
 
         const cabinet = cabinetMap[item.cabinetId];
-        const bin = item.binId ? binMap[item.binId] : null;
         let sublabel = cabinet?.name ?? `Cabinet #${item.cabinetId}`;
-        if (bin) sublabel += ` › Bin: ${bin.label}`;
+        if (bin) sublabel += ` › Bin: ${bin.label}${bin.binNumber ? ` (${bin.binNumber})` : ""}`;
+        if (item.sku) sublabel += ` · SKU: ${item.sku}`;
         sublabel += ` · ${formatQty(item.quantityAvailable)}/${formatQty(item.quantityTotal)} available`;
 
         let badge: string | undefined;
@@ -294,15 +297,20 @@ export function InventoryPage() {
 
     if (showBins) {
       for (const bin of bins) {
-        if (q && !bin.label.toLowerCase().includes(q)) continue;
+        if (
+          q &&
+          !bin.label.toLowerCase().includes(q) &&
+          !(bin.binNumber?.toLowerCase().includes(q))
+        ) continue;
         const cabinet = cabinetMap[bin.cabinetId];
         const room = cabinet ? roomMap[cabinet.roomId] : null;
-        const sublabel = [room?.name, cabinet?.name].filter(Boolean).join(" › ");
+        const sublabelParts = [room?.name, cabinet?.name].filter(Boolean);
+        if (bin.binNumber) sublabelParts.push(`Bin Number: ${bin.binNumber}`);
         out.push({
           type: "bin",
           id: bin.id,
           label: `Bin: ${bin.label}`,
-          sublabel: sublabel || `Cabinet #${bin.cabinetId}`,
+          sublabel: sublabelParts.join(" › ") || `Cabinet #${bin.cabinetId}`,
           to: `/inventory/cabinets/${bin.cabinetId}`,
         });
       }
@@ -363,7 +371,7 @@ export function InventoryPage() {
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search items, bins, cabinets, rooms…"
+          placeholder="Search item name, SKU, bin label, or Bin Number…"
           className="input pl-12 py-3 text-base w-full"
           autoFocus={false}
         />

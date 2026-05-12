@@ -6,6 +6,8 @@ export async function listItems(params?: {
   binId?: number;
   search?: string;
   isActive?: boolean;
+  skip?: number;
+  limit?: number;
 }): Promise<Item[]> {
   const { data } = await apiClient.get<Item[]>("/items", {
     params: {
@@ -13,6 +15,8 @@ export async function listItems(params?: {
       bin_id: params?.binId,
       search: params?.search,
       is_active: params?.isActive ?? true,
+      skip: params?.skip,
+      limit: params?.limit,
     },
   });
   return data;
@@ -29,7 +33,7 @@ export async function createItem(payload: {
   quantityTotal: number;
   cabinetId: number;
   binId?: number;
-  sku?: string;
+  sku: string;
   condition?: string;
   isConsumable?: boolean;
   unitPrice?: number;

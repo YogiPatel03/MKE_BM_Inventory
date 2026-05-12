@@ -120,7 +120,9 @@ The script recognises these column names (case-insensitive, whitespace trimmed):
 
 | CSV header | Canonical field | Notes |
 |------------|----------------|-------|
-| `Bin` / `Bin (if any)` / `Tote` / `Container` | bin | Sub-location within the cabinet |
+| `Bin` / `Bin (if any)` / `Tote` / `Container` | bin | Human-readable bin label, e.g. `Glue Bin` |
+| `Shelf Code` / `Shelf Letter` | shelf_code | Shelf letter used to validate bin identity, e.g. `D` |
+| `Bin Number` / `Bin Code` / `bin_number` | bin_number | Stable physical bin code, e.g. `SMCD1`; required when `Bin` is set |
 | `Bin Requires Full Checkout` / `Requires Full Bin Checkout` / `Full Bin Checkout Required` / `Bin Full Checkout Only` | bin_requires_full_checkout | Yes/No — see below |
 | `Unit` / `Metric` | unit | ft, Pack, rolls, etc. |
 | `Consumable` / `Is Consumable` | consumable | Yes/No/True/False/Y/N/1/0 — see below |
@@ -138,11 +140,10 @@ import failures.
 ## Example CSV
 
 ```csv
-Name,Room,Cabinet,Bin,Quantity,Unit,Consumable,Low Stock Threshold,Unit Price,Condition,SKU,Notes,Bin Requires Full Checkout
-Safety Goggles,Group 1 Tijori,Tijori Top Shelf,,10,,No,2,12.99,GOOD,GROUP1TI-0001,UV-rated,
-Isopropyl Alcohol 70%,Group 1 Tijori,Tijori Top Shelf,Bin A,1 1/2,Gallon,Yes,0.5,8.50,GOOD,GROUP1TI-0002,,
-Extension Cord 10 ft,Group 1 Tijori,Tijori Bottom,,,No,,,FAIR,,Already labelled,
-Zip Ties,Group 1 Tijori,Tijori Bottom,Sabha Bin,100,,Yes,20,,GOOD,GROUP1TI-0004,Mixed sizes,Yes
+Name,Room,Cabinet,Bin,Quantity,Unit,Consumable,Low Stock Threshold,Unit Price,Condition,SKU,Notes,Bin Requires Full Checkout,Shelf Code,Bin Number
+Glue Gun,Shishu Mandal,Cabinet,Glue Bin,2,,No,1,12.99,GOOD,SMC17,,Yes,D,SMCD1
+Elmers Glue Sticks,Shishu Mandal,Cabinet,Glue Bin,32,Pack,Yes,5,3.50,GOOD,SMC26,,,D,SMCD1
+Extension Cord 10 ft,Group 1,Tijori,,3,,No,,,FAIR,G1T1,Already labelled,,,
 ```
 
 ---
@@ -247,11 +248,23 @@ If the **SKU** column contains a value, it is imported as-is.
 If the **SKU** column is blank (or a placeholder like `—`, `N/A`), the importer
 generates a SKU automatically:
 
-- **Prefix:** derived from the room name (uppercase, alphanumeric, max 8 chars)
-  → `Group 1 Tijori` → `GROUP1TI`
-- **Suffix:** 4-digit zero-padded counter, starting at 0001
-  → `GROUP1TI-0001`, `GROUP1TI-0002`, …
+- **Prefix:** room abbreviation plus cabinet/tijori code
+  → `Shishu Mandal` + `Cabinet` → `SMC`, `Group 1` + `Tijori` → `G1T`
+- **Suffix:** unpadded item sequence for that room/cabinet-type group
+  → `SMC1`, `SMC2`, `G1T1`, …
 - Counter skips any values already in use in the system or in the current CSV.
+
+## Bin Number behavior
+
+`SKU` belongs to the item and must be unique per item. `Bin Number` belongs to
+the physical bin. Multiple rows may use the same Bin Number when they refer to
+the same Room, Cabinet, Shelf Code, and Bin label.
+
+The importer fails before commit when:
+
+- A row has a `Bin` label but no `Bin Number`.
+- One Bin Number maps to conflicting bin labels, rooms, cabinets, or shelf codes.
+- The same Room/Cabinet/Shelf/Bin label maps to multiple Bin Numbers.
 
 ### SKU from the .xlsx template
 
@@ -410,6 +423,7 @@ Both files contain:
 | `condition` | Condition value |
 | `sku` | SKU value (provided or generated) |
 | `sku_source` | `provided` or `generated` |
+| `bin_number` | Stable physical bin code |
 | `description` | Full description including structured markers |
 | `warnings` | Semi-colon separated warnings for this row |
 | `errors` | Semi-colon separated errors (row not imported) |

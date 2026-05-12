@@ -331,37 +331,36 @@ class TestParseUnitPrice:
 
 class TestGenerateSku:
     def test_group1_tijori(self):
-        assert generate_sku("Group 1 Tijori", 1) == "GROUP1TI-0001"
+        assert generate_sku("Group 1", 1, "Tijori") == "G1T1"
 
     def test_room_a(self):
-        assert generate_sku("Room A", 5) == "ROOMA-0005"
+        assert generate_sku("Room A", 5, "Cabinet") == "RAC5"
 
-    def test_counter_padding(self):
-        assert generate_sku("Store", 99) == "STORE-0099"
+    def test_counter_unpadded(self):
+        assert generate_sku("Store", 99, "Cabinet") == "STORC99"
 
     def test_counter_overflow_graceful(self):
         # Counter > 9999 should not error, just expand
-        result = generate_sku("Store", 1000)
-        assert result == "STORE-1000"
+        result = generate_sku("Store", 1000, "Cabinet")
+        assert result == "STORC1000"
 
     def test_empty_room_uses_item_fallback(self):
-        result = generate_sku("", 1)
-        assert result.startswith("ITEM-")
+        result = generate_sku("", 1, "Cabinet")
+        assert result == "ITEMC1"
 
     def test_special_chars_stripped(self):
         # Non-alphanumeric chars removed from prefix
-        result = generate_sku("Room #1", 1)
+        result = generate_sku("Room #1", 1, "Cabinet")
         assert "#" not in result
-        assert result.startswith("ROOM1-") or result.startswith("ROOM")
+        assert result == "R1C1"
 
-    def test_prefix_max_8_chars(self):
-        result = generate_sku("Very Long Room Name Here", 1)
-        prefix = result.split("-")[0]
-        assert len(prefix) <= 8
+    def test_long_room_uses_initials(self):
+        result = generate_sku("Very Long Room Name Here", 1, "Cabinet")
+        assert result == "VLRNC1"
 
-    def test_counter_zero_padded_to_4_digits(self):
-        assert generate_sku("Test", 1).endswith("-0001")
-        assert generate_sku("Test", 10).endswith("-0010")
+    def test_counter_not_zero_padded(self):
+        assert generate_sku("Test", 1, "Cabinet").endswith("1")
+        assert generate_sku("Test", 10, "Cabinet").endswith("10")
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +537,11 @@ class TestNormalizeHeaders:
         m, w = normalize_headers(["Name", "Room", "Quantity", "Cabinet", "SKU"])
         assert "sku" in m
 
+    @pytest.mark.parametrize("header", ["Bin Number", "Bin Code", "bin_number", "bin code", "bin number"])
+    def test_bin_number_optional(self, header):
+        m, w = normalize_headers(["Name", "Room", "Quantity", "Cabinet", header])
+        assert "bin_number" in m
+
     def test_unit_optional(self):
         m, w = normalize_headers(["Name", "Room", "Quantity", "Cabinet", "Unit"])
         assert "unit" in m
@@ -658,6 +662,8 @@ class _EmptyCache:
         self.rooms: dict = {}
         self.cabinets: dict = {}
         self.bins: dict = {}
+        self.bins_by_number: dict = {}
+        self.bin_records_by_id: dict = {}
         self.items: dict = {}
         self.skus: set = set()
 
@@ -987,6 +993,86 @@ class TestSkuHandling:
         assert results[0].action == "create"
         generated = results[0].item_payload["sku"]
         assert generated.upper() not in {f"STORE-{i:04d}" for i in range(1, 6)}
+
+
+# ---------------------------------------------------------------------------
+# Bin number handling in process_rows
+# ---------------------------------------------------------------------------
+
+class TestBinNumberHandling:
+    def _run_rows(self, row_overrides_list, cache=None):
+        from import_inventory import process_rows  # noqa: PLC0415
+        headers = [
+            "Name", "Room", "Quantity", "Cabinet", "Bin",
+            "Shelf Code", "Bin Number", "SKU",
+        ]
+        m, _ = normalize_headers(headers)
+        rows = []
+        for i, overrides in enumerate(row_overrides_list):
+            row = {
+                "Name": f"Item{i}", "Room": "Shishu Mandal", "Quantity": "1",
+                "Cabinet": "Cabinet", "Bin": "Glue Bin", "Shelf Code": "D",
+                "Bin Number": "SMCD1", "SKU": f"SMC{i + 1}",
+            }
+            row.update(overrides)
+            rows.append(row)
+        return process_rows(rows, m, cache or _EmptyCache())
+
+    def test_two_unique_skus_can_share_same_bin_number_same_identity(self):
+        results = self._run_rows([
+            {"Name": "Glue Gun", "SKU": "SMC17"},
+            {"Name": "Elmers Glue Sticks", "SKU": "SMC26"},
+        ])
+        assert [r.action for r in results] == ["create", "create"]
+        assert results[0].item_payload["bin_number"] == "SMCD1"
+        assert results[1].item_payload["bin_number"] == "SMCD1"
+        assert results[0].item_payload["_bin_label"] == "Glue Bin"
+        assert results[1].item_payload["_bin_label"] == "Glue Bin"
+
+    def test_missing_bin_number_fails_when_bin_label_present(self):
+        result = self._run_rows([{"Bin Number": ""}])[0]
+        assert result.action == "warn"
+        assert any("bin number is required" in e.lower() for e in result.errors)
+
+    def test_same_bin_number_conflicting_bin_label_fails_all_rows(self):
+        results = self._run_rows([
+            {"Name": "Glue Gun", "Bin": "Glue Bin", "SKU": "SMC17"},
+            {"Name": "Tape", "Bin": "Tape Bin", "SKU": "SMC18"},
+        ])
+        assert results[0].action == "warn"
+        assert results[1].action == "warn"
+        assert any("conflicting" in e.lower() for e in results[0].errors)
+
+    def test_same_bin_number_conflicting_shelf_fails_all_rows(self):
+        results = self._run_rows([
+            {"Name": "Glue Gun", "Shelf Code": "D", "SKU": "SMC17"},
+            {"Name": "Tape", "Shelf Code": "A", "SKU": "SMC18"},
+        ])
+        assert results[0].action == "warn"
+        assert results[1].action == "warn"
+        assert any("conflicting" in e.lower() for e in results[1].errors)
+
+    def test_same_label_same_location_different_bin_number_fails(self):
+        results = self._run_rows([
+            {"Name": "Glue Gun", "Bin Number": "SMCD1", "SKU": "SMC17"},
+            {"Name": "Tape", "Bin Number": "SMCD2", "SKU": "SMC18"},
+        ])
+        assert results[0].action == "warn"
+        assert results[1].action == "warn"
+        assert any("multiple bin numbers" in e.lower() for e in results[0].errors)
+
+    def test_existing_bin_without_bin_number_is_reused_and_marked_for_patch(self):
+        cache = _EmptyCache()
+        cache.rooms["shishu mandal"] = 1
+        cache.cabinets[(1, "cabinet")] = 10
+        cache.bins[(10, "glue bin")] = 99
+        cache.bin_records_by_id[99] = {
+            "id": 99, "cabinet_id": 10, "label": "Glue Bin", "bin_number": None
+        }
+        result = self._run_rows([{"Name": "Glue Gun", "SKU": "SMC17"}], cache=cache)[0]
+        assert result.action == "create"
+        assert result.item_payload["_existing_bin_id"] == 99
+        assert result.item_payload["_bin_number"] == "SMCD1"
 
 
 # ---------------------------------------------------------------------------
@@ -1541,6 +1627,51 @@ class TestApplyImportDoesNotPostWarnRows:
         assert "low_stock_threshold" not in body
         assert "unit_price" not in body
 
+    def test_apply_import_creates_new_bin_with_bin_number(self):
+        from import_inventory import apply_import  # noqa: PLC0415
+        import import_inventory as _inv
+
+        r = RowResult(2, {})
+        r.action = "create"
+        r.location = {"room": "Store", "cabinet": "Shelf", "bin": "Glue Bin", "bin_number": "STORECA1"}
+        r.item_payload = {
+            "_room_name": "Store", "_cabinet_name": "Shelf", "_bin_label": "Glue Bin",
+            "_bin_number": "STORECA1", "_bfco_explicit": False, "_existing_bin_id": None,
+            "name": "Widget", "quantity_total": 5.0, "is_consumable": False,
+            "description": None, "condition": "GOOD",
+            "sku": "TEST-0003", "low_stock_threshold": None, "unit_price": None,
+            "unit": None, "sku_source": "provided",
+            "bin_number": "STORECA1", "bin_requires_full_checkout": False,
+        }
+
+        posted_bodies: list[dict] = []
+        original_post = _inv._api_post
+
+        def mock_post(client, path, body):
+            posted_bodies.append({"path": path, "body": body})
+            if path == "/api/rooms": return {"id": 1, "name": "Store"}
+            if path == "/api/cabinets": return {"id": 2, "name": "Shelf", "room_id": 1}
+            if path == "/api/bins": return {"id": 3, "label": "Glue Bin", "bin_number": "STORECA1", "cabinet_id": 2}
+            if path == "/api/items": return {"id": 100, "name": "Widget"}
+            return {}
+
+        cache = _EmptyCache()
+        cache.rooms["store"] = "NEW:Store"
+        cache.bins_by_number["storeca1"] = {
+            "id": "NEW:STORECA1", "cabinet_id": "NEW:Shelf",
+            "label": "Glue Bin", "bin_number": "STORECA1",
+        }
+
+        _inv._api_post = mock_post
+        try:
+            apply_import([r], client=None, cache=cache)
+        finally:
+            _inv._api_post = original_post
+
+        bin_post = next((p for p in posted_bodies if p["path"] == "/api/bins"), None)
+        assert bin_post is not None
+        assert bin_post["body"]["bin_number"] == "STORECA1"
+
 
 # ---------------------------------------------------------------------------
 # Pagination helper tests
@@ -1959,7 +2090,7 @@ class TestBinRequiresFullCheckoutHeaders:
 
 def _make_bfco_header_map():
     m, _ = normalize_headers([
-        "Name", "Room", "Quantity", "Cabinet", "Bin",
+        "Name", "Room", "Quantity", "Cabinet", "Bin", "Shelf Code", "Bin Number",
         "Consumable", "Bin Requires Full Checkout",
     ])
     return m
@@ -1968,7 +2099,7 @@ def _make_bfco_header_map():
 def _make_bfco_row(**kwargs):
     defaults = {
         "Name": "Widget", "Room": "Store", "Quantity": "5",
-        "Cabinet": "Shelf A", "Bin": "Bin1",
+        "Cabinet": "Shelf A", "Bin": "Bin1", "Shelf Code": "A", "Bin Number": "STORECA1",
         "Consumable": "Yes", "Bin Requires Full Checkout": "",
     }
     defaults.update(kwargs)
@@ -2078,17 +2209,19 @@ class TestBinRequiresFullCheckoutInProcessRows:
         from import_inventory import write_report, RowResult  # noqa: PLC0415
         r = RowResult(2, {})
         r.action = "create"
-        r.location = {"room": "R", "cabinet": "C", "bin": "B"}
+        r.location = {"room": "R", "cabinet": "C", "bin": "B", "bin_number": "RCA1"}
         r.item_payload = {
             "name": "Widget", "quantity_total": 5.0, "is_consumable": False,
             "description": None, "condition": "GOOD", "sku": "T-0001",
             "sku_source": "provided", "low_stock_threshold": None,
             "unit_price": None, "unit": None,
+            "bin_number": "RCA1",
             "bin_requires_full_checkout": True,
         }
         write_report([r], tmp_path / "report")
         data = _json.loads((tmp_path / "report.json").read_text())
         assert data[0]["bin_requires_full_checkout"] is True
+        assert data[0]["bin_number"] == "RCA1"
 
     def test_blank_first_then_explicit_yes_resolves_true_new_bin(self):
         """Blank row first then explicit Yes for same new bin → both create with bfco=True."""
@@ -2140,14 +2273,16 @@ class TestApplyImportBfcoPatch:
         from import_inventory import RowResult  # noqa: PLC0415
         r = RowResult(2, {})
         r.action = "create"
-        r.location = {"room": "Store", "cabinet": "Shelf A", "bin": "Bin1"}
+        r.location = {"room": "Store", "cabinet": "Shelf A", "bin": "Bin1", "bin_number": "STORECA1"}
         r.item_payload = {
             "_room_name": "Store", "_cabinet_name": "Shelf A", "_bin_label": "Bin1",
+            "_bin_number": "STORECA1",
             "_bfco_explicit": True, "_existing_bin_id": bin_id,
             "name": "Widget", "quantity_total": 3, "is_consumable": False,
             "description": None, "condition": "GOOD",
             "sku": "T-0001", "sku_source": "provided",
             "low_stock_threshold": None, "unit_price": None, "unit": None,
+            "bin_number": "STORECA1",
             "bin_requires_full_checkout": bfco_value,
         }
         return r
@@ -2177,6 +2312,9 @@ class TestApplyImportBfcoPatch:
         cache.rooms["store"] = 1
         cache.cabinets[(1, "shelf a")] = 2
         cache.bins[(2, "bin1")] = 99
+        cache.bins_by_number["storeca1"] = {
+            "id": 99, "cabinet_id": 2, "label": "Bin1", "bin_number": "STORECA1"
+        }
 
         _inv._api_post = mock_post
         _inv._api_patch = failing_patch
@@ -2216,6 +2354,9 @@ class TestApplyImportBfcoPatch:
         cache.rooms["store"] = 1
         cache.cabinets[(1, "shelf a")] = 2
         cache.bins[(2, "bin1")] = 99
+        cache.bins_by_number["storeca1"] = {
+            "id": 99, "cabinet_id": 2, "label": "Bin1", "bin_number": "STORECA1"
+        }
 
         _inv._api_post = mock_post
         _inv._api_patch = mock_patch

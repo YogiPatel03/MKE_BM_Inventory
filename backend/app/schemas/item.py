@@ -1,7 +1,14 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+
+def _normalize_sku(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return value
+    stripped = value.strip()
+    return stripped.upper() or None
 
 
 class ItemBase(BaseModel):
@@ -16,12 +23,21 @@ class ItemBase(BaseModel):
     unit_price: Optional[float] = None
     low_stock_threshold: Optional[float] = None
 
+    @field_validator("sku")
+    @classmethod
+    def normalize_sku(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_sku(value)
+
 
 class ItemCreate(ItemBase):
+    sku: str
+
     @model_validator(mode="after")
     def qty_check(self) -> "ItemCreate":
         if self.quantity_total <= 0:
             raise ValueError("quantity_total must be greater than 0")
+        if not self.sku:
+            raise ValueError("sku is required")
         return self
 
 
@@ -38,6 +54,11 @@ class ItemUpdate(BaseModel):
     unit_price: Optional[float] = None
     low_stock_threshold: Optional[float] = None
 
+    @field_validator("sku")
+    @classmethod
+    def normalize_sku(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_sku(value)
+
 
 class ItemOut(ItemBase):
     model_config = ConfigDict(from_attributes=True)
@@ -47,6 +68,8 @@ class ItemOut(ItemBase):
     is_active: bool
     qr_code_token: Optional[str] = None
     low_stock_threshold: Optional[float] = None
+    bin_label: Optional[str] = None
+    bin_number: Optional[str] = None
     prior_cabinet_id: Optional[int] = None
     prior_bin_id: Optional[int] = None
     created_at: datetime

@@ -15,6 +15,7 @@ export function BinModal({ cabinetId, onClose }: Props) {
   const user = useAuthStore((s) => s.user);
   const canManageBins = user?.role?.canManageBins ?? false;
   const [label, setLabel] = useState("");
+  const [binNumber, setBinNumber] = useState("");
   const [locationNote, setLocationNote] = useState("");
   const [description, setDescription] = useState("");
   const [requiresFullBinCheckout, setRequiresFullBinCheckout] = useState(false);
@@ -29,6 +30,7 @@ export function BinModal({ cabinetId, onClose }: Props) {
     try {
       await createBin({
         label,
+        binNumber: binNumber.trim().toUpperCase(),
         cabinetId,
         locationNote: locationNote || undefined,
         description: description || undefined,
@@ -65,7 +67,11 @@ export function BinModal({ cabinetId, onClose }: Props) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="bin-label" className="label">Label *</label>
-            <input id="bin-label" className="input" placeholder="e.g. A1, Top shelf" value={label} onChange={(e) => setLabel(e.target.value)} required autoFocus />
+            <input id="bin-label" className="input" placeholder="e.g. Glue Bin" value={label} onChange={(e) => setLabel(e.target.value)} required autoFocus />
+          </div>
+          <div>
+            <label htmlFor="bin-number" className="label">Bin Number *</label>
+            <input id="bin-number" className="input" placeholder="e.g. SMCD1" value={binNumber} onChange={(e) => setBinNumber(e.target.value.toUpperCase())} required />
           </div>
           <div>
             <label htmlFor="bin-location-note" className="label">Location note</label>

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import require_manage_bins
@@ -12,15 +13,31 @@ from app.schemas.bin import BinCreate, BinOut, BinUpdate
 router = APIRouter(prefix="/bins", tags=["bins"])
 
 
+def _is_bin_number_unique_error(exc: IntegrityError) -> bool:
+    message = str(exc.orig).lower()
+    return any(
+        token in message
+        for token in (
+            "ux_bins_bin_number_lower",
+            "ix_bins_bin_number",
+            "bins.bin_number",
+        )
+    )
+
+
 @router.get("", response_model=list[BinOut])
 async def list_bins(
     cabinet_id: int | None = None,
+    search: str | None = None,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[Bin]:
     query = select(Bin).order_by(Bin.label)
     if cabinet_id:
         query = query.where(Bin.cabinet_id == cabinet_id)
+    if search:
+        term = f"%{search}%"
+        query = query.where(or_(Bin.label.ilike(term), Bin.bin_number.ilike(term)))
     result = await db.execute(query)
     return list(result.scalars().all())
 
@@ -37,9 +54,28 @@ async def create_bin(
     if not cabinet_result.scalar_one_or_none():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Cabinet not found")
 
+    if body.bin_number:
+        duplicate = await db.execute(
+            select(Bin).where(func.lower(Bin.bin_number) == body.bin_number.lower())
+        )
+        if duplicate.scalar_one_or_none():
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Bin number '{body.bin_number}' already exists",
+            )
+
     bin_ = Bin(**body.model_dump())
     db.add(bin_)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if _is_bin_number_unique_error(exc):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Bin Number '{body.bin_number}' already exists",
+            ) from exc
+        raise
     await db.refresh(bin_)
     return bin_
 
@@ -70,10 +106,33 @@ async def update_bin(
     if not bin_:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Bin not found")
 
-    for field, value in body.model_dump(exclude_none=True).items():
+    changes = body.model_dump(exclude_none=True)
+    if "bin_number" in changes:
+        duplicate = await db.execute(
+            select(Bin).where(
+                func.lower(Bin.bin_number) == changes["bin_number"].lower(),
+                Bin.id != bin_id,
+            )
+        )
+        if duplicate.scalar_one_or_none():
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Bin number '{changes['bin_number']}' already exists",
+            )
+
+    for field, value in changes.items():
         setattr(bin_, field, value)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if _is_bin_number_unique_error(exc):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Bin Number '{changes.get('bin_number', bin_.bin_number)}' already exists",
+            ) from exc
+        raise
     await db.refresh(bin_)
     return bin_
 

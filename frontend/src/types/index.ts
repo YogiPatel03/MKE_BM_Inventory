@@ -71,6 +71,7 @@ export interface Bin {
   id: number;
   cabinetId: number;
   label: string;
+  binNumber: string | null;
   groupNumber: number | null;
   locationNote: string | null;
   description: string | null;
@@ -93,6 +94,8 @@ export interface Item {
   cabinetId: number;
   binId: number | null;
   sku: string | null;
+  binLabel: string | null;
+  binNumber: string | null;
   condition: ItemCondition;
   isActive: boolean;
   isConsumable: boolean;

@@ -38,7 +38,7 @@ export function ItemModal({ cabinetId, bins, onClose }: Props) {
         quantityTotal,
         cabinetId,
         binId: binId !== "" ? binId : undefined,
-        sku: sku || undefined,
+        sku: sku.trim().toUpperCase(),
         condition,
         isConsumable,
         unitPrice: unitPrice !== "" ? parseFloat(unitPrice) : undefined,
@@ -125,8 +125,8 @@ export function ItemModal({ cabinetId, bins, onClose }: Props) {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="item-sku" className="label">SKU / Code</label>
-              <input id="item-sku" className="input" placeholder="Optional" value={sku} onChange={(e) => setSku(e.target.value)} />
+              <label htmlFor="item-sku" className="label">SKU *</label>
+              <input id="item-sku" className="input" placeholder="e.g. SMC17" value={sku} onChange={(e) => setSku(e.target.value.toUpperCase())} required />
             </div>
             <div>
               <label htmlFor="item-price" className="label">Unit price ($)</label>
@@ -149,7 +149,9 @@ export function ItemModal({ cabinetId, bins, onClose }: Props) {
               <select id="item-bin" className="input" value={binId} onChange={(e) => setBinId(e.target.value === "" ? "" : Number(e.target.value))}>
                 <option value="">No bin (direct in cabinet)</option>
                 {bins.map((b) => (
-                  <option key={b.id} value={b.id}>{b.label}{b.locationNote ? ` — ${b.locationNote}` : ""}</option>
+                  <option key={b.id} value={b.id}>
+                    {b.label}{b.binNumber ? ` (${b.binNumber})` : ""}{b.locationNote ? ` — ${b.locationNote}` : ""}
+                  </option>
                 ))}
               </select>
             </div>
