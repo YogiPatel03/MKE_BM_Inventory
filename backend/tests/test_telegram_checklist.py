@@ -23,6 +23,7 @@ from app.bot.checklist_helpers import (
     _current_week_monday,
     format_full_checklist,
     format_incomplete_checklist,
+    format_morning_checklist,
     format_task_line,
     send_sunday_morning_for_group,
     send_sunday_evening_for_group,
@@ -959,14 +960,15 @@ async def test_format_incomplete_shows_only_incomplete(db):
 @pytest.mark.asyncio
 async def test_format_incomplete_all_done_message(db):
     cl = await _seed_checklist(db)
-    sub = await _seed_subchecklist(db, cl)
+    sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
     await _seed_task(db, cl, title="Vacuum", subchecklist=sub, is_completed=True)
     await db.commit()
 
     from app.bot.checklist_helpers import load_checklist_for_group
     loaded = await load_checklist_for_group(db, GroupName.GROUP_1)
     text = format_incomplete_checklist(loaded)
-    assert "all tasks done" in text.lower() or "✅" in text
+    assert "Post Sabha" in text
+    assert "✅" in text
 
 
 # ─── Sunday scheduler functions ───────────────────────────────────────────────
@@ -1010,10 +1012,11 @@ async def test_sunday_morning_no_checklist_raises(db):
 
 @pytest.mark.asyncio
 async def test_sunday_evening_sends_incomplete_tasks_only(db):
-    """Sunday evening function sends only incomplete tasks to group."""
+    """Sunday evening function sends only incomplete Post Sabha tasks to group."""
     cl = await _seed_checklist(db, GroupName.GROUP_1)
-    await _seed_task(db, cl, title="Done task", is_completed=True)
-    pending = await _seed_task(db, cl, title="Pending task", is_completed=False)
+    sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    await _seed_task(db, cl, title="Done task", subchecklist=sub, is_completed=True)
+    pending = await _seed_task(db, cl, title="Pending task", subchecklist=sub, is_completed=False)
     await db.commit()
 
     bot = _mock_bot()
@@ -1035,13 +1038,14 @@ async def test_sunday_evening_sends_incomplete_tasks_only(db):
 
 @pytest.mark.asyncio
 async def test_sunday_evening_dms_assigned_users(db):
-    """Sunday evening DMs users with specifically assigned incomplete tasks."""
+    """Sunday evening DMs users with specifically assigned incomplete Post Sabha tasks."""
     user_role = _user_role()
     db.add(user_role)
     await db.flush()
     user = await _seed_user(db, telegram_chat_id="555", role=user_role, group_name=GroupName.GROUP_1)
     cl = await _seed_checklist(db, GroupName.GROUP_1)
-    task = await _seed_task(db, cl, title="Assigned task", assignee_id=user.id, is_completed=False)
+    sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    task = await _seed_task(db, cl, title="Assigned task", subchecklist=sub, assignee_id=user.id, is_completed=False)
     await db.commit()
 
     bot = _mock_bot()
@@ -1069,14 +1073,15 @@ async def test_sunday_evening_dms_assigned_users(db):
 
 @pytest.mark.asyncio
 async def test_sunday_evening_does_not_dm_for_everyone_tasks(db):
-    """Sunday evening must NOT DM users for tasks with assignee_id=None (everyone tasks)."""
+    """Sunday evening must NOT DM users for Post Sabha tasks with assignee_id=None (everyone tasks)."""
     user_role = _user_role()
     db.add(user_role)
     await db.flush()
     user = await _seed_user(db, telegram_chat_id="555", role=user_role, group_name=GroupName.GROUP_1)
     cl = await _seed_checklist(db, GroupName.GROUP_1)
-    # Task is for "everyone" (assignee_id=None) — no DM should be sent
-    await _seed_task(db, cl, title="Everyone task", assignee_id=None, is_completed=False)
+    sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    # Task is for "everyone" (assignee_id=None) in a Post Sabha section — no DM should be sent
+    await _seed_task(db, cl, title="Everyone task", subchecklist=sub, assignee_id=None, is_completed=False)
     await db.commit()
 
     bot = _mock_bot()
@@ -1428,7 +1433,8 @@ async def test_sunday_evening_dm_false_returns_warning(db):
     await db.flush()
     user = await _seed_user(db, telegram_chat_id="555", role=user_role, group_name=GroupName.GROUP_1)
     cl = await _seed_checklist(db, GroupName.GROUP_1)
-    await _seed_task(db, cl, title="Assigned task", assignee_id=user.id, is_completed=False)
+    sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    await _seed_task(db, cl, title="Assigned task", subchecklist=sub, assignee_id=user.id, is_completed=False)
     await db.commit()
 
     with patch("app.services.telegram_service.send_to_group_topic_strict", AsyncMock(return_value=12345)), \
@@ -1454,8 +1460,9 @@ async def test_sunday_evening_dm_raises_all_users_attempted(db):
         group_name=GroupName.GROUP_1, username="u2", full_name="User Two",
     )
     cl = await _seed_checklist(db, GroupName.GROUP_1)
-    await _seed_task(db, cl, title="Task A", assignee_id=user1.id, is_completed=False)
-    await _seed_task(db, cl, title="Task B", assignee_id=user2.id, is_completed=False)
+    sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    await _seed_task(db, cl, title="Task A", subchecklist=sub, assignee_id=user1.id, is_completed=False)
+    await _seed_task(db, cl, title="Task B", subchecklist=sub, assignee_id=user2.id, is_completed=False)
     await db.commit()
 
     dm_mock = AsyncMock(side_effect=[RuntimeError("Telegram down"), True])
@@ -1546,3 +1553,193 @@ async def test_sunday_evening_db_failure_isolation(caplog):
     assert len(set(received_sessions)) == len(called_groups)
     error_msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert any("GROUP_1" in m for m in error_msgs)
+
+
+# ─── Pre/Post Sabha section filtering ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_morning_message_includes_pre_sabha_tasks(db):
+    """format_morning_checklist includes tasks from PRE_SABHA sections."""
+    cl = await _seed_checklist(db)
+    sub = await _seed_subchecklist(db, cl, title="Before Sabha", section_type=SubchecklistType.PRE_SABHA, order=0)
+    task = await _seed_task(db, cl, title="Checkout Sabha Bin", subchecklist=sub)
+    await db.commit()
+
+    from app.bot.checklist_helpers import load_checklist_for_group
+    loaded = await load_checklist_for_group(db, GroupName.GROUP_1)
+    text = format_morning_checklist(loaded)
+    assert f"#{task.id}" in text
+    assert "Before Sabha" in text
+    assert "Pre Sabha" in text
+
+
+@pytest.mark.asyncio
+async def test_morning_message_excludes_post_sabha_tasks(db):
+    """format_morning_checklist must not include tasks from POST_SABHA sections."""
+    cl = await _seed_checklist(db)
+    pre_sub = await _seed_subchecklist(db, cl, title="Before Sabha", section_type=SubchecklistType.PRE_SABHA, order=0)
+    post_sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    pre_task = await _seed_task(db, cl, title="Checkout Sabha Bin", subchecklist=pre_sub)
+    post_task = await _seed_task(db, cl, title="Vacuum", subchecklist=post_sub)
+    await db.commit()
+
+    from app.bot.checklist_helpers import load_checklist_for_group
+    loaded = await load_checklist_for_group(db, GroupName.GROUP_1)
+    text = format_morning_checklist(loaded)
+    assert f"#{pre_task.id}" in text
+    assert f"#{post_task.id}" not in text
+    assert "After Sabha" not in text
+
+
+@pytest.mark.asyncio
+async def test_morning_progress_counts_only_pre_sabha(db):
+    """Morning progress line counts only Pre Sabha tasks, not Post Sabha."""
+    cl = await _seed_checklist(db)
+    pre_sub = await _seed_subchecklist(db, cl, title="Before Sabha", section_type=SubchecklistType.PRE_SABHA, order=0)
+    post_sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    await _seed_task(db, cl, title="Pre task 1", subchecklist=pre_sub, is_completed=True)
+    await _seed_task(db, cl, title="Pre task 2", subchecklist=pre_sub, is_completed=False)
+    await _seed_task(db, cl, title="Post task 1", subchecklist=post_sub, is_completed=False)
+    await db.commit()
+
+    from app.bot.checklist_helpers import load_checklist_for_group
+    loaded = await load_checklist_for_group(db, GroupName.GROUP_1)
+    text = format_morning_checklist(loaded)
+    # 1 of 2 pre-sabha tasks done; post-sabha task excluded from count
+    assert "1/2 Pre Sabha tasks complete" in text
+
+
+@pytest.mark.asyncio
+async def test_evening_message_includes_post_sabha_tasks(db):
+    """format_incomplete_checklist includes incomplete tasks from POST_SABHA sections."""
+    cl = await _seed_checklist(db)
+    sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    task = await _seed_task(db, cl, title="Vacuum", subchecklist=sub, is_completed=False)
+    await db.commit()
+
+    from app.bot.checklist_helpers import load_checklist_for_group
+    loaded = await load_checklist_for_group(db, GroupName.GROUP_1)
+    text = format_incomplete_checklist(loaded)
+    assert f"#{task.id}" in text
+    assert "Post Sabha" in text
+
+
+@pytest.mark.asyncio
+async def test_evening_message_excludes_pre_sabha_tasks(db):
+    """format_incomplete_checklist must not include tasks from PRE_SABHA sections."""
+    cl = await _seed_checklist(db)
+    pre_sub = await _seed_subchecklist(db, cl, title="Before Sabha", section_type=SubchecklistType.PRE_SABHA, order=0)
+    post_sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    pre_task = await _seed_task(db, cl, title="Checkout Sabha Bin", subchecklist=pre_sub, is_completed=False)
+    post_task = await _seed_task(db, cl, title="Vacuum", subchecklist=post_sub, is_completed=False)
+    await db.commit()
+
+    from app.bot.checklist_helpers import load_checklist_for_group
+    loaded = await load_checklist_for_group(db, GroupName.GROUP_1)
+    text = format_incomplete_checklist(loaded)
+    assert f"#{post_task.id}" in text
+    assert f"#{pre_task.id}" not in text
+    assert "Before Sabha" not in text
+
+
+@pytest.mark.asyncio
+async def test_evening_progress_counts_only_post_sabha(db):
+    """Evening progress line counts only Post Sabha tasks, not Pre Sabha."""
+    cl = await _seed_checklist(db)
+    pre_sub = await _seed_subchecklist(db, cl, title="Before Sabha", section_type=SubchecklistType.PRE_SABHA, order=0)
+    post_sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    await _seed_task(db, cl, title="Pre task", subchecklist=pre_sub, is_completed=False)
+    await _seed_task(db, cl, title="Post task 1", subchecklist=post_sub, is_completed=True)
+    await _seed_task(db, cl, title="Post task 2", subchecklist=post_sub, is_completed=False)
+    await db.commit()
+
+    from app.bot.checklist_helpers import load_checklist_for_group
+    loaded = await load_checklist_for_group(db, GroupName.GROUP_1)
+    text = format_incomplete_checklist(loaded)
+    # 1 of 2 post-sabha tasks done; pre-sabha task excluded from count
+    assert "1/2 Post Sabha tasks complete" in text
+
+
+@pytest.mark.asyncio
+async def test_evening_all_done_refers_to_post_sabha(db):
+    """All-done evening message specifically references Post Sabha, not full checklist."""
+    cl = await _seed_checklist(db)
+    pre_sub = await _seed_subchecklist(db, cl, title="Before Sabha", section_type=SubchecklistType.PRE_SABHA, order=0)
+    post_sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    # Pre Sabha task incomplete — should not affect the "all done" check
+    await _seed_task(db, cl, title="Pre task", subchecklist=pre_sub, is_completed=False)
+    await _seed_task(db, cl, title="Post task", subchecklist=post_sub, is_completed=True)
+    await db.commit()
+
+    from app.bot.checklist_helpers import load_checklist_for_group
+    loaded = await load_checklist_for_group(db, GroupName.GROUP_1)
+    text = format_incomplete_checklist(loaded)
+    assert "Post Sabha" in text
+    assert "✅" in text
+    # Must not claim the whole checklist is done
+    assert "all tasks done" not in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_evening_dms_only_post_sabha_tasks(db):
+    """Evening DMs are sent only for incomplete Post Sabha tasks assigned to a user."""
+    user_role = _user_role()
+    db.add(user_role)
+    await db.flush()
+    user = await _seed_user(db, telegram_chat_id="555", role=user_role, group_name=GroupName.GROUP_1)
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    post_sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    post_task = await _seed_task(db, cl, title="Vacuum", subchecklist=post_sub, assignee_id=user.id, is_completed=False)
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.services.telegram_service.get_bot", return_value=bot), \
+         patch("app.services.telegram_service._parse_topic_mapping",
+               return_value={GroupName.GROUP_1: 42}), \
+         patch("app.services.telegram_service.settings") as ms:
+        ms.telegram_coordinator_chat_id = "-100chat"
+        ms.telegram_enabled = True
+        ms.telegram_bot_token = "token"
+
+        await send_sunday_evening_for_group(GroupName.GROUP_1, db)
+
+    dm_calls = [
+        call for call in bot.send_message.call_args_list
+        if str(call.kwargs.get("chat_id")) == "555"
+    ]
+    assert len(dm_calls) >= 1
+    assert f"#{post_task.id}" in dm_calls[0].kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_evening_no_dm_if_only_incomplete_pre_sabha(db):
+    """A user with only incomplete Pre Sabha tasks must NOT receive an evening DM."""
+    user_role = _user_role()
+    db.add(user_role)
+    await db.flush()
+    user = await _seed_user(db, telegram_chat_id="555", role=user_role, group_name=GroupName.GROUP_1)
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    pre_sub = await _seed_subchecklist(db, cl, title="Before Sabha", section_type=SubchecklistType.PRE_SABHA, order=0)
+    post_sub = await _seed_subchecklist(db, cl, title="After Sabha Cleanup", section_type=SubchecklistType.POST_SABHA, order=1)
+    # User has an incomplete Pre Sabha task — no DM should be sent
+    await _seed_task(db, cl, title="Pre task", subchecklist=pre_sub, assignee_id=user.id, is_completed=False)
+    # Post Sabha task is complete — no DM trigger
+    await _seed_task(db, cl, title="Post task", subchecklist=post_sub, is_completed=True)
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.services.telegram_service.get_bot", return_value=bot), \
+         patch("app.services.telegram_service._parse_topic_mapping",
+               return_value={GroupName.GROUP_1: 42}), \
+         patch("app.services.telegram_service.settings") as ms:
+        ms.telegram_coordinator_chat_id = "-100chat"
+        ms.telegram_enabled = True
+        ms.telegram_bot_token = "token"
+
+        await send_sunday_evening_for_group(GroupName.GROUP_1, db)
+
+    dm_calls = [
+        call for call in bot.send_message.call_args_list
+        if str(call.kwargs.get("chat_id")) == "555"
+    ]
+    assert len(dm_calls) == 0

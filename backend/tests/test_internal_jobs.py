@@ -490,17 +490,19 @@ async def test_morning_multi_chunk_partial_send_failure_returns_502(client):
 # ─── DM failure tests: real send_sunday_evening_for_group path ────────────────
 
 def _make_checklist_mock_with_assignee(assignee_id: int = 42):
-    """Checklist with one item specifically assigned to assignee_id."""
+    """Checklist with one item in a POST_SABHA section assigned to assignee_id."""
     item = MagicMock()
     item.is_completed = False
     item.assignee_id = assignee_id
     item.id = 1
     item.title = "Assigned Task"
     item.item_order = 0
+    item.subchecklist_id = 1
 
     sub = MagicMock()
     sub.id = 1
-    sub.title = "Section"
+    sub.title = "After Sabha Cleanup"
+    sub.section_type = "POST_SABHA"
     sub.section_order = 0
     sub.items = [item]
 
@@ -585,6 +587,7 @@ async def test_evening_dm_raises_returns_200_both_dms_attempted(client):
     item1.id = 1
     item1.title = "Task A"
     item1.item_order = 0
+    item1.subchecklist_id = 1
 
     item2 = MagicMock()
     item2.is_completed = False
@@ -592,10 +595,12 @@ async def test_evening_dm_raises_returns_200_both_dms_attempted(client):
     item2.id = 2
     item2.title = "Task B"
     item2.item_order = 1
+    item2.subchecklist_id = 1
 
     sub = MagicMock()
     sub.id = 1
-    sub.title = "Section"
+    sub.title = "After Sabha Cleanup"
+    sub.section_type = "POST_SABHA"
     sub.section_order = 0
     sub.items = [item1, item2]
 

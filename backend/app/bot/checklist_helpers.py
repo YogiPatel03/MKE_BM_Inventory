@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import AsyncSessionLocal
-from app.models.checklist import Checklist, ChecklistItem, GroupName, Subchecklist
+from app.models.checklist import Checklist, ChecklistItem, GroupName, Subchecklist, SubchecklistType
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -117,45 +117,97 @@ def format_full_checklist(checklist: Checklist) -> str:
     return "\n".join(lines)
 
 
-def format_incomplete_checklist(checklist: Checklist) -> str:
+def format_morning_checklist(checklist: Checklist) -> str:
     """
-    Format only incomplete tasks for the Sunday evening reminder.
+    Format only Pre Sabha sections for the Sunday morning reminder.
     Requires subchecklists, items, assignee, and completed_by loaded.
-    Returns a short "all done" message if nothing is incomplete.
     """
     group_display = GroupName.DISPLAY.get(checklist.group_name, checklist.group_name)
     week = checklist.week_start.strftime("%b %d")
 
-    seen_ids: set[int] = set()
-    incomplete_by_sub: dict[int, list[ChecklistItem]] = {}
+    pre_sabha_subs = [
+        sub for sub in sorted(checklist.subchecklists, key=lambda s: s.section_order)
+        if sub.section_type == SubchecklistType.PRE_SABHA
+    ]
+    all_pre_tasks = [task for sub in pre_sabha_subs for task in sub.items]
 
-    for sub in checklist.subchecklists:
+    if not all_pre_tasks:
+        return (
+            f"<b>📋 {html.escape(group_display)} Pre Sabha Reminder — Week of {week}</b>\n\n"
+            f"No Pre Sabha tasks found for this week."
+        )
+
+    lines = [
+        f"<b>📋 {html.escape(group_display)} Pre Sabha Reminder — Week of {week}</b>",
+        "",
+        "Jai Swaminarayan everyone!",
+        "",
+        "Please complete these before sabha starts today.",
+    ]
+
+    for sub in pre_sabha_subs:
+        section_items = sorted(sub.items, key=lambda t: t.item_order)
+        if section_items:
+            lines.append(f"\n<b>🕘 {html.escape(sub.title)}</b>")
+            for task in section_items:
+                lines.append(f"  {format_task_line(task)}")
+
+    done = sum(1 for t in all_pre_tasks if t.is_completed)
+    total = len(all_pre_tasks)
+    lines.append(f"\n<i>Progress: {done}/{total} Pre Sabha tasks complete</i>")
+    lines.append("\nPlease mark each item complete once it is done.")
+
+    return "\n".join(lines)
+
+
+def format_incomplete_checklist(checklist: Checklist) -> str:
+    """
+    Format only incomplete Post Sabha tasks for the Sunday evening reminder.
+    Requires subchecklists, items, assignee, and completed_by loaded.
+    Returns a short "all done" message if all Post Sabha tasks are complete,
+    or an explicit notice if no Post Sabha sections exist.
+    """
+    group_display = GroupName.DISPLAY.get(checklist.group_name, checklist.group_name)
+    week = checklist.week_start.strftime("%b %d")
+
+    post_sabha_subs = [
+        sub for sub in sorted(checklist.subchecklists, key=lambda s: s.section_order)
+        if sub.section_type == SubchecklistType.POST_SABHA
+    ]
+
+    if not post_sabha_subs:
+        return (
+            f"<b>⏰ {html.escape(group_display)} Post Sabha Reminder — Week of {week}</b>\n\n"
+            f"No Post Sabha tasks found for this week."
+        )
+
+    all_post_tasks = [task for sub in post_sabha_subs for task in sub.items]
+    incomplete_by_sub: dict[int, list[ChecklistItem]] = {}
+    for sub in post_sabha_subs:
         for task in sub.items:
-            seen_ids.add(task.id)
             if not task.is_completed:
                 incomplete_by_sub.setdefault(sub.id, []).append(task)
 
-    unsectioned_incomplete = [
-        t for t in checklist.items
-        if t.id not in seen_ids and not t.is_completed
+    if not any(incomplete_by_sub.values()):
+        return f"✅ <b>{html.escape(group_display)}</b> — all Post Sabha tasks done! Great work."
+
+    lines = [
+        f"<b>⏰ {html.escape(group_display)} Post Sabha Reminder — Week of {week}</b>",
+        "",
+        "Please finish these cleanup items before leaving today.",
     ]
 
-    if not any(incomplete_by_sub.values()) and not unsectioned_incomplete:
-        return f"✅ <b>{html.escape(group_display)}</b> — all tasks done! Great work."
-
-    lines = [f"<b>⏰ {html.escape(group_display)} — Incomplete tasks (week of {week}):</b>"]
-
-    for sub in sorted(checklist.subchecklists, key=lambda s: s.section_order):
+    for sub in post_sabha_subs:
         items = incomplete_by_sub.get(sub.id, [])
         if items:
-            lines.append(f"\n<b>{html.escape(sub.title)}:</b>")
+            lines.append(f"\n<b>🧹 {html.escape(sub.title)}</b>")
             for task in sorted(items, key=lambda t: t.item_order):
                 lines.append(f"  {format_task_line(task)}")
 
-    if unsectioned_incomplete:
-        lines.append("\n<b>Other:</b>")
-        for task in sorted(unsectioned_incomplete, key=lambda t: t.item_order):
-            lines.append(f"  {format_task_line(task)}")
+    done = sum(1 for t in all_post_tasks if t.is_completed)
+    total = len(all_post_tasks)
+    lines.append(f"\n<i>Progress: {done}/{total} Post Sabha tasks complete</i>")
+    lines.append("\nPlease mark each item complete once it is done.")
 
     return "\n".join(lines)
 
@@ -240,7 +292,7 @@ async def send_sunday_morning_for_group(group_name: str, db: AsyncSession) -> No
     if not checklist:
         raise RuntimeError(f"No checklist for group {group_name}")
 
-    text = format_full_checklist(checklist)
+    text = format_morning_checklist(checklist)
     for chunk in split_messages(text):
         result = await send_to_group_topic_strict(group_name, chunk)
         if result is None:
@@ -284,9 +336,18 @@ async def _send_evening_dms_for_group(
     from app.models.user import User
     from app.services.telegram_service import send_user_dm
 
+    post_sabha_sub_ids = {
+        sub.id for sub in checklist.subchecklists
+        if sub.section_type == SubchecklistType.POST_SABHA
+    }
+
     assignee_tasks: dict[int, list[ChecklistItem]] = {}
     for task in checklist.items:
-        if not task.is_completed and task.assignee_id is not None:
+        if (
+            not task.is_completed
+            and task.assignee_id is not None
+            and task.subchecklist_id in post_sabha_sub_ids
+        ):
             assignee_tasks.setdefault(task.assignee_id, []).append(task)
 
     if not assignee_tasks:
