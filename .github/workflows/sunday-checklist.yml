@@ -1,0 +1,124 @@
+name: Sunday Checklist Jobs
+
+# Triggers Sunday 9 AM and 7 PM America/Chicago checklist Telegram messages
+# via protected HTTP endpoints on the backend. This is the reliable outer trigger
+# for Render Free, where the dyno may be sleeping and APScheduler won't fire.
+#
+# Timezone handling:
+#   America/Chicago uses CDT (UTC-5) roughly Mar–Nov and CST (UTC-6) Nov–Mar.
+#   Two cron entries per event (one per offset). The resolver checks the current
+#   Chicago UTC offset against each cron entry's expected offset. If the offset
+#   does not match, that cron slot is the inactive DST/CST copy and is skipped
+#   silently (exit 0). If the offset matches but the Chicago hour is wrong, the
+#   job aborts with an error. This prevents the off-hour duplicate from reaching
+#   the backend; dedup is a second line of defence, not the primary guard.
+#
+# Duplicate-send risk:
+#   If the Render dyno restarts between APScheduler firing and this GHA request
+#   arriving, the in-memory dedup dict is cleared and both may send. This is
+#   unlikely (requires a restart within the 30-minute window) and is accepted
+#   as a low-probability edge case. A DB-backed job log would eliminate it.
+#
+# Required secrets (set in repo Settings → Secrets → Actions):
+#   BACKEND_URL  — e.g. https://cabinet-inventory-api.onrender.com
+#   CRON_SECRET  — same value as the CRON_SECRET Render environment variable
+
+on:
+  schedule:
+    # CDT (UTC-5): Sunday 9 AM CDT  = Sunday  14:00 UTC
+    - cron: "0 14 * * 0"
+    # CST (UTC-6): Sunday 9 AM CST  = Sunday  15:00 UTC
+    - cron: "0 15 * * 0"
+    # CDT (UTC-5): Sunday 7 PM CDT  = Monday  00:00 UTC
+    - cron: "0 0 * * 1"
+    # CST (UTC-6): Sunday 7 PM CST  = Monday  01:00 UTC
+    - cron: "0 1 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Which job to run: morning, evening, or both"
+        required: false
+        default: "both"
+
+jobs:
+  sunday-checklist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve job type
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # workflow_dispatch: skip the time gate entirely; validate job value only.
+            JOB="${{ inputs.job }}"
+            if [ "$JOB" != "morning" ] && [ "$JOB" != "evening" ] && [ "$JOB" != "both" ]; then
+              echo "::error::Unknown workflow_dispatch job input: ${JOB} (must be morning, evening, or both)"
+              exit 1
+            fi
+          else
+            # Scheduled run. Cron expressions are in UTC; each target Chicago time
+            # has two UTC slots (CDT = UTC-5, CST = UTC-6). Only one slot is active
+            # at any given moment; the inactive DST/CST copy is skipped via offset check.
+            SCHEDULE=$(echo "${{ github.event.schedule }}" | tr -s ' ')
+            case "$SCHEDULE" in
+              "0 14 * * 0") EXPECTED_OFFSET="-0500"; EXPECTED_JOB="morning"; EXPECTED_HOUR="09" ;;
+              "0 15 * * 0") EXPECTED_OFFSET="-0600"; EXPECTED_JOB="morning"; EXPECTED_HOUR="09" ;;
+              "0 0 * * 1")  EXPECTED_OFFSET="-0500"; EXPECTED_JOB="evening"; EXPECTED_HOUR="19" ;;
+              "0 1 * * 1")  EXPECTED_OFFSET="-0600"; EXPECTED_JOB="evening"; EXPECTED_HOUR="19" ;;
+              *)
+                echo "::error::Unknown schedule expression: ${SCHEDULE}"
+                exit 1 ;;
+            esac
+            CHI_OFFSET=$(TZ=America/Chicago date +%z)
+            CHI_HOUR=$(TZ=America/Chicago date +%H)
+            CHI_MIN=$(TZ=America/Chicago date +%M)
+            # Use $((10#…)) to force decimal interpretation — bare 08/09 are octal in sh.
+            CHI_MIN_INT=$((10#$CHI_MIN))
+            if [ "$CHI_OFFSET" != "$EXPECTED_OFFSET" ]; then
+              echo "Inactive DST/CST slot: ${SCHEDULE} expects ${EXPECTED_OFFSET} but current offset is ${CHI_OFFSET} — skipping"
+              exit 0
+            fi
+            if [ "$CHI_HOUR" != "$EXPECTED_HOUR" ]; then
+              echo "::error::Schedule ${SCHEDULE} fired outside expected Chicago hour (expected ${EXPECTED_HOUR}, got ${CHI_HOUR}) — aborting"
+              exit 1
+            fi
+            # Allow up to 15 minutes of GHA queue delay. Runs starting after minute 15
+            # are rejected so a stale queued job cannot trigger a late send.
+            if [ "$CHI_MIN_INT" -gt 15 ]; then
+              echo "::error::Schedule ${SCHEDULE} started too late (Chicago time: ${CHI_HOUR}:${CHI_MIN}, tolerance is 0–15 min) — aborting"
+              exit 1
+            fi
+            JOB="$EXPECTED_JOB"
+          fi
+          echo "job=${JOB}" >> "$GITHUB_OUTPUT"
+          echo "Resolved job type: ${JOB} (Chicago time: $(TZ=America/Chicago date))"
+
+      - name: Run morning checklist
+        if: steps.resolve.outputs.job == 'morning' || steps.resolve.outputs.job == 'both'
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${BACKEND_URL}/api/internal/jobs/sunday-checklist-morning" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json")
+          body=$(echo "$response" | head -n -1)
+          code=$(echo "$response" | tail -n 1)
+          echo "HTTP ${code}: ${body}"
+          [ "$code" = "200" ] || exit 1
+
+      - name: Run evening checklist reminder
+        if: steps.resolve.outputs.job == 'evening' || steps.resolve.outputs.job == 'both'
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${BACKEND_URL}/api/internal/jobs/sunday-checklist-evening" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json")
+          body=$(echo "$response" | head -n -1)
+          code=$(echo "$response" | tail -n 1)
+          echo "HTTP ${code}: ${body}"
+          [ "$code" = "200" ] || exit 1

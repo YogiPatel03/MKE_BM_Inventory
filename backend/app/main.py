@@ -16,6 +16,7 @@ from app.routers import (
     bins,
     cabinets,
     checklists,
+    internal_jobs,
     inventory_requests,
     items,
     moves,
@@ -77,31 +78,15 @@ async def _run_weekly_checklist_generation() -> None:
 
 
 async def _run_sunday_checklist_morning() -> None:
-    """Send the full weekly task list to each group's topic on Sunday morning."""
-    from app.bot.checklist_helpers import send_sunday_morning_for_group
-    from app.models.checklist import GroupName
-
-    log.info("Sunday morning scheduler: sending weekly checklists")
-    for group in GroupName.ALL:
-        try:
-            async with AsyncSessionLocal() as db:
-                await send_sunday_morning_for_group(group, db)
-        except Exception:
-            log.exception("Sunday morning scheduler: group %s failed", group)
+    """Sunday 9 AM Central — delegates to shared orchestrator (also used by HTTP endpoint)."""
+    from app.bot.checklist_helpers import run_sunday_morning_all_groups
+    await run_sunday_morning_all_groups()
 
 
 async def _run_sunday_evening_reminder() -> None:
-    """Send incomplete task reminders to each group and DM assigned users Sunday evening."""
-    from app.bot.checklist_helpers import send_sunday_evening_for_group
-    from app.models.checklist import GroupName
-
-    log.info("Sunday evening scheduler: sending incomplete task reminders")
-    for group in GroupName.ALL:
-        try:
-            async with AsyncSessionLocal() as db:
-                await send_sunday_evening_for_group(group, db)
-        except Exception:
-            log.exception("Sunday evening scheduler: group %s failed", group)
+    """Sunday 7 PM Central — delegates to shared orchestrator (also used by HTTP endpoint)."""
+    from app.bot.checklist_helpers import run_sunday_evening_all_groups
+    await run_sunday_evening_all_groups()
 
 
 @asynccontextmanager
@@ -150,6 +135,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await db.commit()
 
     log.info("Startup complete. Scheduler running.")
+
+    if settings.telegram_enabled and not settings.telegram_group_topic_thread_ids.strip():
+        log.warning(
+            "TELEGRAM_GROUP_TOPIC_THREAD_IDS is not set — required Sunday group/topic sends will "
+            "fail with 502. Set this env var before Sunday."
+        )
 
     if settings.is_production and settings.telegram_enabled:
         from telegram import Bot
@@ -201,6 +192,7 @@ app.include_router(activity.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 app.include_router(checklists.router, prefix="/api")
 app.include_router(telegram_webhook.router, prefix="/api")
+app.include_router(internal_jobs.router, prefix="/api")
 
 
 @app.get("/health")

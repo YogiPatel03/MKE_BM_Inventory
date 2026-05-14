@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Sentry
     sentry_dsn: str = ""
 
+    # Internal job auth — used by GitHub Actions cron → backend HTTP triggers
+    cron_secret: str = ""
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"

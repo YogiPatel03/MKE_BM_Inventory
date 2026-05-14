@@ -982,9 +982,10 @@ async def test_sunday_morning_sends_one_message_per_group(db):
 
     bot = _mock_bot()
     with patch("app.services.telegram_service.get_bot", return_value=bot), \
+         patch("app.services.telegram_service._parse_topic_mapping",
+               return_value={GroupName.GROUP_1: 42, GroupName.GROUP_2: 43}), \
          patch("app.services.telegram_service.settings") as ms:
         ms.telegram_coordinator_chat_id = "-100chat"
-        ms.telegram_group_topic_thread_ids = ""
         ms.telegram_enabled = True
         ms.telegram_bot_token = "token"
 
@@ -1001,20 +1002,10 @@ async def test_sunday_morning_sends_one_message_per_group(db):
 
 
 @pytest.mark.asyncio
-async def test_sunday_morning_skips_missing_checklist(db):
-    """Sunday morning logs a warning and skips groups with no current-week checklist."""
-    bot = _mock_bot()
-    with patch("app.services.telegram_service.get_bot", return_value=bot), \
-         patch("app.services.telegram_service.settings") as ms:
-        ms.telegram_coordinator_chat_id = "-100chat"
-        ms.telegram_group_topic_thread_ids = ""
-        ms.telegram_enabled = True
-        ms.telegram_bot_token = "token"
-
+async def test_sunday_morning_no_checklist_raises(db):
+    """Missing checklist raises RuntimeError — orchestrator treats it as a required-send failure."""
+    with pytest.raises(RuntimeError, match="No checklist"):
         await send_sunday_morning_for_group(GroupName.GROUP_3, db)
-
-    # No messages sent when no checklist exists
-    assert bot.send_message.call_count == 0
 
 
 @pytest.mark.asyncio
@@ -1027,9 +1018,10 @@ async def test_sunday_evening_sends_incomplete_tasks_only(db):
 
     bot = _mock_bot()
     with patch("app.services.telegram_service.get_bot", return_value=bot), \
+         patch("app.services.telegram_service._parse_topic_mapping",
+               return_value={GroupName.GROUP_1: 42}), \
          patch("app.services.telegram_service.settings") as ms:
         ms.telegram_coordinator_chat_id = "-100chat"
-        ms.telegram_group_topic_thread_ids = ""
         ms.telegram_enabled = True
         ms.telegram_bot_token = "token"
 
@@ -1054,9 +1046,10 @@ async def test_sunday_evening_dms_assigned_users(db):
 
     bot = _mock_bot()
     with patch("app.services.telegram_service.get_bot", return_value=bot), \
+         patch("app.services.telegram_service._parse_topic_mapping",
+               return_value={GroupName.GROUP_1: 42}), \
          patch("app.services.telegram_service.settings") as ms:
         ms.telegram_coordinator_chat_id = "-100chat"
-        ms.telegram_group_topic_thread_ids = ""
         ms.telegram_enabled = True
         ms.telegram_bot_token = "token"
 
@@ -1088,9 +1081,10 @@ async def test_sunday_evening_does_not_dm_for_everyone_tasks(db):
 
     bot = _mock_bot()
     with patch("app.services.telegram_service.get_bot", return_value=bot), \
+         patch("app.services.telegram_service._parse_topic_mapping",
+               return_value={GroupName.GROUP_1: 42}), \
          patch("app.services.telegram_service.settings") as ms:
         ms.telegram_coordinator_chat_id = "-100chat"
-        ms.telegram_group_topic_thread_ids = ""
         ms.telegram_enabled = True
         ms.telegram_bot_token = "token"
 
@@ -1130,30 +1124,20 @@ async def test_sunday_evening_topic_mapping(db):
 
 
 @pytest.mark.asyncio
-async def test_sunday_morning_missing_topic_fallback(db):
-    """When topic mapping is missing for a group, falls back to coordinator chat without thread."""
+async def test_sunday_morning_missing_topic_raises(db):
+    """Missing topic mapping raises RuntimeError — strict mode: no fallback for Sunday required sends."""
     cl = await _seed_checklist(db, GroupName.GROUP_1)
     await _seed_task(db, cl, title="Vacuum")
     await db.commit()
 
-    bot = _mock_bot()
-    # No topic mapping for GROUP_1
-    with patch("app.services.telegram_service.get_bot", return_value=bot), \
-         patch("app.services.telegram_service._parse_topic_mapping", return_value={}), \
+    with patch("app.services.telegram_service._parse_topic_mapping", return_value={}), \
          patch("app.services.telegram_service.settings") as ms:
         ms.telegram_coordinator_chat_id = "-100chat"
         ms.telegram_enabled = True
         ms.telegram_bot_token = "token"
 
-        await send_sunday_morning_for_group(GroupName.GROUP_1, db)
-
-    group_calls = [
-        call for call in bot.send_message.call_args_list
-        if str(call.kwargs.get("chat_id")) == "-100chat"
-    ]
-    assert len(group_calls) >= 1
-    # No thread_id (falls back to no thread)
-    assert group_calls[0].kwargs.get("message_thread_id") is None
+        with pytest.raises(RuntimeError, match="Telegram send failed"):
+            await send_sunday_morning_for_group(GroupName.GROUP_1, db)
 
 
 # ─── Existing commands still work ─────────────────────────────────────────────
@@ -1392,8 +1376,8 @@ async def test_sunday_morning_scheduler_exception_isolation(caplog):
     mock_cm.__aexit__ = AsyncMock(return_value=False)
 
     with patch("app.bot.checklist_helpers.send_sunday_morning_for_group", side_effect=mock_morning), \
-         patch("app.main.AsyncSessionLocal", return_value=mock_cm), \
-         caplog.at_level(logging.ERROR, logger="app.main"):
+         patch("app.bot.checklist_helpers.AsyncSessionLocal", return_value=mock_cm), \
+         caplog.at_level(logging.ERROR, logger="app.bot.checklist_helpers"):
         await _run_sunday_checklist_morning()
 
     assert GroupName.GROUP_1 in called_groups
@@ -1412,19 +1396,21 @@ async def test_sunday_evening_scheduler_exception_isolation(caplog):
 
     called_groups: list[str] = []
 
-    async def mock_evening(group: str, db: object) -> None:
+    async def mock_required(group: str, db: object):
         called_groups.append(group)
         if group == GroupName.GROUP_1:
             raise RuntimeError("simulated GROUP_1 failure")
+        return MagicMock()
 
     mock_db = AsyncMock()
     mock_cm = MagicMock()
     mock_cm.__aenter__ = AsyncMock(return_value=mock_db)
     mock_cm.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.bot.checklist_helpers.send_sunday_evening_for_group", side_effect=mock_evening), \
-         patch("app.main.AsyncSessionLocal", return_value=mock_cm), \
-         caplog.at_level(logging.ERROR, logger="app.main"):
+    with patch("app.bot.checklist_helpers._send_sunday_evening_required", side_effect=mock_required), \
+         patch("app.bot.checklist_helpers._send_evening_dms_for_group", AsyncMock(return_value=[])), \
+         patch("app.bot.checklist_helpers.AsyncSessionLocal", return_value=mock_cm), \
+         caplog.at_level(logging.ERROR, logger="app.bot.checklist_helpers"):
         await _run_sunday_evening_reminder()
 
     assert GroupName.GROUP_1 in called_groups
@@ -1432,6 +1418,56 @@ async def test_sunday_evening_scheduler_exception_isolation(caplog):
     assert GroupName.GROUP_3 in called_groups
     error_msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert any("GROUP_1" in m for m in error_msgs)
+
+
+@pytest.mark.asyncio
+async def test_sunday_evening_dm_false_returns_warning(db):
+    """send_user_dm returning False → warning returned, no raise, group send succeeds."""
+    user_role = _user_role()
+    db.add(user_role)
+    await db.flush()
+    user = await _seed_user(db, telegram_chat_id="555", role=user_role, group_name=GroupName.GROUP_1)
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _seed_task(db, cl, title="Assigned task", assignee_id=user.id, is_completed=False)
+    await db.commit()
+
+    with patch("app.services.telegram_service.send_to_group_topic_strict", AsyncMock(return_value=12345)), \
+         patch("app.services.telegram_service.send_user_dm", AsyncMock(return_value=False)):
+        warnings = await send_sunday_evening_for_group(GroupName.GROUP_1, db)
+
+    assert len(warnings) == 1
+    assert "assignee_id=" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_sunday_evening_dm_raises_all_users_attempted(db):
+    """When send_user_dm raises for one assignee, all assignees are still DM'd; warning returned, no raise."""
+    user_role = _user_role()
+    db.add(user_role)
+    await db.flush()
+    user1 = await _seed_user(
+        db, telegram_chat_id="111", role=user_role,
+        group_name=GroupName.GROUP_1, username="u1", full_name="User One",
+    )
+    user2 = await _seed_user(
+        db, telegram_chat_id="222", role=user_role,
+        group_name=GroupName.GROUP_1, username="u2", full_name="User Two",
+    )
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _seed_task(db, cl, title="Task A", assignee_id=user1.id, is_completed=False)
+    await _seed_task(db, cl, title="Task B", assignee_id=user2.id, is_completed=False)
+    await db.commit()
+
+    dm_mock = AsyncMock(side_effect=[RuntimeError("Telegram down"), True])
+    with patch("app.services.telegram_service.send_to_group_topic_strict", AsyncMock(return_value=12345)), \
+         patch("app.services.telegram_service.send_user_dm", dm_mock):
+        warnings = await send_sunday_evening_for_group(GroupName.GROUP_1, db)
+
+    # Both users were attempted despite the first raising
+    assert dm_mock.await_count == 2
+    # Warning generated for the failing DM
+    assert len(warnings) == 1
+    assert "assignee_id=" in warnings[0]
 
 
 @pytest.mark.asyncio
@@ -1459,8 +1495,8 @@ async def test_sunday_morning_db_failure_isolation(caplog):
         return cm
 
     with patch("app.bot.checklist_helpers.send_sunday_morning_for_group", side_effect=mock_morning), \
-         patch("app.main.AsyncSessionLocal", side_effect=make_fresh_cm), \
-         caplog.at_level(logging.ERROR, logger="app.main"):
+         patch("app.bot.checklist_helpers.AsyncSessionLocal", side_effect=make_fresh_cm), \
+         caplog.at_level(logging.ERROR, logger="app.bot.checklist_helpers"):
         await _run_sunday_checklist_morning()
 
     assert GroupName.GROUP_1 in called_groups
@@ -1483,11 +1519,12 @@ async def test_sunday_evening_db_failure_isolation(caplog):
     called_groups: list[str] = []
     received_sessions: list[int] = []
 
-    async def mock_evening(group: str, db: object) -> None:
+    async def mock_required(group: str, db: object):
         called_groups.append(group)
         received_sessions.append(id(db))
         if group == GroupName.GROUP_1:
             raise SQLAlchemyError("simulated DB failure for GROUP_1")
+        return MagicMock()
 
     def make_fresh_cm() -> MagicMock:
         fresh_db = AsyncMock()
@@ -1496,9 +1533,10 @@ async def test_sunday_evening_db_failure_isolation(caplog):
         cm.__aexit__ = AsyncMock(return_value=False)
         return cm
 
-    with patch("app.bot.checklist_helpers.send_sunday_evening_for_group", side_effect=mock_evening), \
-         patch("app.main.AsyncSessionLocal", side_effect=make_fresh_cm), \
-         caplog.at_level(logging.ERROR, logger="app.main"):
+    with patch("app.bot.checklist_helpers._send_sunday_evening_required", side_effect=mock_required), \
+         patch("app.bot.checklist_helpers._send_evening_dms_for_group", AsyncMock(return_value=[])), \
+         patch("app.bot.checklist_helpers.AsyncSessionLocal", side_effect=make_fresh_cm), \
+         caplog.at_level(logging.ERROR, logger="app.bot.checklist_helpers"):
         await _run_sunday_evening_reminder()
 
     assert GroupName.GROUP_1 in called_groups

@@ -123,6 +123,27 @@ async def send_to_group_topic(group_name: str, text: str) -> Optional[int]:
     return await _send(settings.telegram_coordinator_chat_id, text, message_thread_id=thread_id)
 
 
+async def send_to_group_topic_strict(group_name: str, text: str) -> Optional[int]:
+    """
+    Send to the coordinator chat topic thread for group_name.
+    Unlike send_to_group_topic, returns None without fallback when topic mapping is absent.
+    Used for required sends where a missing topic config must be visible as failure.
+    Returns message_id or None. Never raises.
+    """
+    if not settings.telegram_coordinator_chat_id:
+        log.warning("send_to_group_topic_strict called but TELEGRAM_COORDINATOR_CHAT_ID is not set")
+        return None
+    thread_id = get_thread_id_for_group(group_name)
+    if thread_id is None:
+        log.warning(
+            "No topic thread_id configured for group %s — set TELEGRAM_GROUP_TOPIC_THREAD_IDS. "
+            "Strict mode: required send cannot proceed",
+            group_name,
+        )
+        return None
+    return await _send(settings.telegram_coordinator_chat_id, text, message_thread_id=thread_id)
+
+
 async def send_user_dm(user: "User", text: str) -> bool:
     """DM a linked user. Returns True on success, False if unlinked or send failed. Never raises."""
     if not user or not user.telegram_chat_id:

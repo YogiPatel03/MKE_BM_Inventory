@@ -8,6 +8,7 @@ import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import app.bot.checklist_helpers as checklist_helpers
 from app.database import Base
 from app.dependencies import get_db
 from app.main import app
@@ -25,6 +26,16 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@pytest.fixture(autouse=True)
+def clear_dedup():
+    """Clear dedup state before every test so scheduler state doesn't leak between tests."""
+    checklist_helpers._DEDUP.clear()
+    checklist_helpers._DEDUP_LOCKS.clear()
+    yield
+    checklist_helpers._DEDUP.clear()
+    checklist_helpers._DEDUP_LOCKS.clear()
 
 
 @pytest_asyncio.fixture(autouse=True)

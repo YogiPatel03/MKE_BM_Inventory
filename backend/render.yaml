@@ -23,6 +23,8 @@ services:
         generateValue: true
       - key: TELEGRAM_COORDINATOR_CHAT_ID
         sync: false
+      - key: TELEGRAM_GROUP_TOPIC_THREAD_IDS
+        sync: false
       - key: ENVIRONMENT
         value: production
       - key: FRONTEND_URL
@@ -30,4 +32,6 @@ services:
       - key: BACKEND_URL
         sync: false
       - key: SENTRY_DSN
+        sync: false
+      - key: CRON_SECRET
         sync: false
