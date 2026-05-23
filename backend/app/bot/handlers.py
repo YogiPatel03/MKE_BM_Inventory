@@ -663,8 +663,23 @@ async def cmd_approve(ctx: BotContext, request_id_str: str, db: AsyncSession) ->
 
     # Mutation — isolated from post-commit notifications.
     from app.core.exceptions import InsufficientStockError, TransactionConflictError
+    from app.services.checklist_service import (
+        add_return_task_for_bin_transaction,
+        add_return_task_for_transaction,
+    )
     try:
-        req = await approve_request(db, request_id=request_id, approver_id=user.id, due_at=None)
+        req, txn, bin_txn = await approve_request(
+            db, request_id=request_id, approver_id=user.id, due_at=None
+        )
+        # Wire Sabha return task before commit.
+        requester_for_task = (await db.execute(
+            select(User).where(User.id == req.requester_id)
+        )).scalar_one_or_none()
+        if requester_for_task:
+            if txn:
+                await add_return_task_for_transaction(db, txn, requester_for_task)
+            elif bin_txn:
+                await add_return_task_for_bin_transaction(db, bin_txn, requester_for_task)
         await db.commit()
     except TransactionConflictError as e:
         await db.rollback()

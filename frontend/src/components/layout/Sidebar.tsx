@@ -1,7 +1,6 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   Box,
-  ClipboardCheck,
   ClipboardList,
   DoorOpen,
   FileText,
@@ -34,7 +33,6 @@ export function Sidebar() {
     { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { to: "/inventory", label: "Inventory", icon: PackageSearch },
     { to: "/rooms", label: "Rooms", icon: DoorOpen },
-    { to: "/checklist", label: "Checklist", icon: ClipboardCheck },
     { to: "/transactions", label: "Transactions", icon: ClipboardList },
     { to: "/requests", label: "Requests", icon: Inbox },
     { to: "/settings", label: "Settings", icon: Settings },

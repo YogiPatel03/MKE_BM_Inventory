@@ -160,7 +160,7 @@ function ChecklistHistoryTab() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-500">
-        Older checklists are hidden from the main Checklist page but can be searched here.
+        Older checklists are hidden from the Dashboard but can be searched here.
       </p>
 
       {/* Filters */}

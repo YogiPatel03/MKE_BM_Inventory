@@ -8,7 +8,7 @@ created immediately, and the request status advances to FULFILLED.
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +18,7 @@ from app.core.exceptions import NotFoundError, TransactionConflictError
 from app.models.bin_transaction import BinTransaction, BinTransactionStatus
 from app.models.inventory_request import InventoryRequest, RequestStatus
 from app.models.item import Item
-from app.models.transaction import Transaction, TransactionStatus
+from app.models.transaction import CheckoutPurpose, Transaction, TransactionStatus
 from app.models.user import User
 
 log = logging.getLogger(__name__)
@@ -33,12 +33,19 @@ async def create_request(
     quantity_requested: int,
     reason: Optional[str],
     due_at: Optional[datetime],
+    purpose: CheckoutPurpose = CheckoutPurpose.GENERAL,
 ) -> InventoryRequest:
     # Verify target exists
     if item_id:
         result = await db.execute(select(Item).where(Item.id == item_id, Item.is_active == True))
         if not result.scalar_one_or_none():
             raise NotFoundError("Item", item_id)
+
+    if bin_id is not None:
+        from app.models.bin import Bin
+        bin_result = await db.execute(select(Bin).where(Bin.id == bin_id))
+        if not bin_result.scalar_one_or_none():
+            raise NotFoundError("Bin", bin_id)
 
     req = InventoryRequest(
         requester_id=requester_id,
@@ -48,6 +55,7 @@ async def create_request(
         reason=reason,
         due_at=due_at,
         status=RequestStatus.PENDING,
+        purpose=purpose,
     )
     db.add(req)
     await db.flush()
@@ -62,12 +70,14 @@ async def approve_request(
     request_id: int,
     approver_id: int,
     due_at: Optional[datetime],
-) -> InventoryRequest:
+) -> Tuple[InventoryRequest, Optional[Transaction], Optional[BinTransaction]]:
     """
     Approve a pending request and immediately fulfill it:
     - Item requests → create a Transaction (CHECKED_OUT)
     - Bin requests  → create a BinTransaction + child Transactions for bin items
     Status advances to FULFILLED (not just APPROVED).
+
+    Returns (req, txn, bin_txn) so callers can wire Sabha checklist tasks.
     """
     result = await db.execute(
         select(InventoryRequest).where(InventoryRequest.id == request_id).with_for_update()
@@ -84,6 +94,9 @@ async def approve_request(
 
     req.approver_id = approver_id
     req.approved_at = now
+
+    txn: Optional[Transaction] = None
+    bin_txn: Optional[BinTransaction] = None
 
     if req.item_id:
         # Fulfill item request → checkout transaction
@@ -106,6 +119,7 @@ async def approve_request(
             status=TransactionStatus.CHECKED_OUT,
             due_at=effective_due_at,
             notes=f"[Fulfilled from request #{req.id}]",
+            purpose=req.purpose,
         )
         db.add(txn)
 
@@ -141,6 +155,7 @@ async def approve_request(
             status=BinTransactionStatus.CHECKED_OUT,
             due_at=effective_due_at,
             notes=f"[Fulfilled from request #{req.id}]",
+            purpose=req.purpose,
         )
         db.add(bin_txn)
         await db.flush()
@@ -162,6 +177,7 @@ async def approve_request(
                 due_at=effective_due_at,
                 notes=f"[Bin checkout via request #{req.id}]",
                 bin_transaction_id=bin_txn.id,
+                purpose=req.purpose,
             ))
 
     req.status = RequestStatus.FULFILLED
@@ -169,8 +185,12 @@ async def approve_request(
 
     await db.flush()
     await db.refresh(req)
+    if txn:
+        await db.refresh(txn)
+    if bin_txn:
+        await db.refresh(bin_txn)
     log.info("Request fulfilled: req=%d by=%d", req.id, approver_id)
-    return req
+    return req, txn, bin_txn
 
 
 async def deny_request(

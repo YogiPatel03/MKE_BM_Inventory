@@ -17,8 +17,6 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { RequestsPage } from "@/pages/RequestsPage";
 import { ReportsPage } from "@/pages/ReportsPage";
 import { QRScanPage } from "@/pages/QRScanPage";
-import { ChecklistPage } from "@/pages/ChecklistPage";
-
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user);
   const isLoading = useAuthStore((s) => s.isLoading);
@@ -75,7 +73,7 @@ export default function App() {
           <Route path="settings" element={<SettingsPage />} />
           <Route path="requests" element={<RequestsPage />} />
           <Route path="reports" element={<ReportsPage />} />
-          <Route path="checklist" element={<ChecklistPage />} />
+          <Route path="checklist" element={<Navigate to="/dashboard" replace />} />
           <Route path="qr/:token" element={<QRScanPage />} />
         </Route>
       </Routes>

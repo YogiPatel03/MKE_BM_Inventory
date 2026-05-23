@@ -148,6 +148,11 @@ export function RequestsPage() {
                       <span className={STATUS_COLORS[req.status] ?? "badge-slate"}>
                         {req.status}
                       </span>
+                      {req.purpose === "SABHA" && (
+                        <span className="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">
+                          Sabha
+                        </span>
+                      )}
                     </div>
                     <div className="text-sm text-slate-600 mt-1">
                       {targetLabel(req)}

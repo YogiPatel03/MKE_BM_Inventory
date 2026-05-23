@@ -4,7 +4,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Edit2, Flame, Inbox, MapPin, RotateCcw, Scale } from "lucide-react";
 import { toast } from "@/store/toast";
 import { ConfirmModal } from "@/components/modals/ConfirmModal";
-import { PromptModal } from "@/components/modals/PromptModal";
+import { RequestModal } from "@/components/modals/RequestModal";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
 import { getItem, updateItem } from "@/api/items";
 import { listTransactions } from "@/api/transactions";
@@ -16,7 +16,7 @@ import { MarkAsUsedModal } from "@/components/modals/MarkAsUsedModal";
 import { StockAdjustModal } from "@/components/modals/StockAdjustModal";
 import { MoveModal } from "@/components/modals/MoveModal";
 import { useAuthStore } from "@/store/auth";
-import type { Bin, Cabinet, Item, UsageEvent } from "@/types";
+import type { Bin, Cabinet, CheckoutPurpose, Item, UsageEvent } from "@/types";
 
 async function fetchCabinets(): Promise<Cabinet[]> {
   const { data } = await apiClient.get("/cabinets");
@@ -203,7 +203,7 @@ export function ItemDetailPage() {
 
   const handleRequest = () => setRequestPromptOpen(true);
 
-  const doRequest = async (reason: string) => {
+  const doRequest = async (reason: string, purpose: CheckoutPurpose) => {
     if (!item) return;
     setRequestPromptOpen(false);
     setRequestLoading(true);
@@ -212,6 +212,7 @@ export function ItemDetailPage() {
         itemId: item.id,
         quantityRequested: 1,
         reason: reason || undefined,
+        purpose,
       });
       navigate("/requests");
     } catch (e: any) {
@@ -502,10 +503,8 @@ export function ItemDetailPage() {
         <InlineEditModal item={item} onClose={() => setEditOpen(false)} />
       )}
       {requestPromptOpen && item && (
-        <PromptModal
-          title="Request Checkout"
-          label="Reason for request"
-          placeholder="e.g. needed for event setup"
+        <RequestModal
+          title="Request Item"
           confirmLabel="Submit request"
           onConfirm={doRequest}
           onCancel={() => setRequestPromptOpen(false)}

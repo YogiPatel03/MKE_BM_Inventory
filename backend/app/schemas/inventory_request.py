@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.models.transaction import CheckoutPurpose
+
 
 class InventoryRequestCreate(BaseModel):
     item_id: Optional[int] = None
@@ -11,6 +13,7 @@ class InventoryRequestCreate(BaseModel):
     quantity_requested: Decimal = Field(default=Decimal("1"), gt=Decimal("0"), decimal_places=2)
     reason: Optional[str] = None
     due_at: Optional[datetime] = None
+    purpose: CheckoutPurpose = CheckoutPurpose.GENERAL
 
     @model_validator(mode="after")
     def require_item_or_bin(self) -> "InventoryRequestCreate":
@@ -39,6 +42,7 @@ class InventoryRequestOut(BaseModel):
     bin_id: Optional[int] = None
     quantity_requested: float
     status: str
+    purpose: CheckoutPurpose
     reason: Optional[str] = None
     denial_reason: Optional[str] = None
     due_at: Optional[datetime] = None

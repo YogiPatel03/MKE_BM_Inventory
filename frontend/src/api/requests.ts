@@ -1,5 +1,5 @@
 import { apiClient } from "./client";
-import type { InventoryRequest } from "@/types";
+import type { CheckoutPurpose, InventoryRequest } from "@/types";
 
 export async function submitRequest(data: {
   itemId?: number;
@@ -7,6 +7,7 @@ export async function submitRequest(data: {
   quantityRequested?: number;
   reason?: string;
   dueAt?: string;
+  purpose?: CheckoutPurpose;
 }): Promise<InventoryRequest> {
   const { data: res } = await apiClient.post("/requests", {
     item_id: data.itemId,
@@ -14,6 +15,7 @@ export async function submitRequest(data: {
     quantity_requested: data.quantityRequested ?? 1,
     reason: data.reason,
     due_at: data.dueAt,
+    purpose: data.purpose ?? "GENERAL",
   });
   return res;
 }

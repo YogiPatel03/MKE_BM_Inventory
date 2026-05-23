@@ -13,7 +13,7 @@ import { BinQRModal } from "@/components/modals/BinQRModal";
 import { ItemModal } from "@/components/modals/ItemModal";
 import { MarkAsUsedModal } from "@/components/modals/MarkAsUsedModal";
 import { MoveModal } from "@/components/modals/MoveModal";
-import { PromptModal } from "@/components/modals/PromptModal";
+import { RequestModal } from "@/components/modals/RequestModal";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
 import { toast } from "@/store/toast";
 
@@ -456,22 +456,22 @@ export function CabinetDetailPage() {
   const handleRequestBin = (binId: number) => setRequestingBinId(binId);
   const handleRequestItem = (itemId: number) => setRequestingItemId(itemId);
 
-  const doRequestBin = async (reason: string) => {
+  const doRequestBin = async (reason: string, purpose: CheckoutPurpose) => {
     const binId = requestingBinId!;
     setRequestingBinId(null);
     try {
-      await submitRequest({ binId, reason: reason || undefined });
+      await submitRequest({ binId, reason: reason || undefined, purpose });
       navigate("/requests");
     } catch (e: any) {
       toast.error(e?.response?.data?.detail ?? "Failed to submit request");
     }
   };
 
-  const doRequestItem = async (reason: string) => {
+  const doRequestItem = async (reason: string, purpose: CheckoutPurpose) => {
     const itemId = requestingItemId!;
     setRequestingItemId(null);
     try {
-      await submitRequest({ itemId, quantityRequested: 1, reason: reason || undefined });
+      await submitRequest({ itemId, quantityRequested: 1, reason: reason || undefined, purpose });
       navigate("/requests");
     } catch (e: any) {
       toast.error(e?.response?.data?.detail ?? "Failed to submit request");
@@ -587,20 +587,16 @@ export function CabinetDetailPage() {
       {itemModalOpen && <ItemModal cabinetId={cabinetId} bins={bins} onClose={() => setItemModalOpen(false)} />}
       {editCabinetOpen && cabinet && <EditCabinetModal cabinet={cabinet} onClose={() => setEditCabinetOpen(false)} />}
       {requestingBinId !== null && (
-        <PromptModal
+        <RequestModal
           title="Request Bin"
-          label="Reason for request"
-          placeholder="e.g. needed for event setup"
           confirmLabel="Submit request"
           onConfirm={doRequestBin}
           onCancel={() => setRequestingBinId(null)}
         />
       )}
       {requestingItemId !== null && (
-        <PromptModal
+        <RequestModal
           title="Request Item"
-          label="Reason for request"
-          placeholder="e.g. needed for event setup"
           confirmLabel="Submit request"
           onConfirm={doRequestItem}
           onCancel={() => setRequestingItemId(null)}

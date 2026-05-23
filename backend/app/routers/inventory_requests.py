@@ -17,6 +17,10 @@ from app.schemas.inventory_request import (
     InventoryRequestDeny,
     InventoryRequestOut,
 )
+from app.services.checklist_service import (
+    add_return_task_for_bin_transaction,
+    add_return_task_for_transaction,
+)
 from app.services.request_service import (
     approve_request,
     cancel_request,
@@ -51,6 +55,7 @@ async def submit_request(
         quantity_requested=body.quantity_requested,
         reason=body.reason,
         due_at=body.due_at,
+        purpose=body.purpose,
     )
     await db.commit()
     await db.refresh(req)
@@ -134,12 +139,23 @@ async def approve(
             detail="You do not have permission to approve requests from this group.",
         )
 
-    req = await approve_request(
+    req, txn, bin_txn = await approve_request(
         db,
         request_id=request_id,
         approver_id=current_user.id,
         due_at=body.due_at,
     )
+
+    # Wire Sabha return task before committing so it's in the same transaction.
+    requester_for_task = (await db.execute(
+        select(User).where(User.id == req.requester_id)
+    )).scalar_one_or_none()
+    if requester_for_task:
+        if txn:
+            await add_return_task_for_transaction(db, txn, requester_for_task)
+        elif bin_txn:
+            await add_return_task_for_bin_transaction(db, bin_txn, requester_for_task)
+
     await db.commit()
     await db.refresh(req)
 

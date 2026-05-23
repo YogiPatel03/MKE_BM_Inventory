@@ -91,6 +91,14 @@ export async function listBins(cabinetId?: number): Promise<Bin[]> {
   return data;
 }
 
+export async function findBinByNumber(binNumber: string): Promise<Bin | null> {
+  const { data } = await apiClient.get<Bin[]>("/bins", {
+    params: { search: binNumber.trim() },
+  });
+  const normalized = binNumber.trim().toLowerCase();
+  return data.find((b) => b.binNumber?.toLowerCase() === normalized) ?? null;
+}
+
 export async function listItems(params: {
   cabinet_id?: number;
   bin_id?: number;

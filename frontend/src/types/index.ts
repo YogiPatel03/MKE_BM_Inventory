@@ -275,6 +275,7 @@ export interface InventoryRequest {
   binId: number | null;
   quantityRequested: number;
   status: RequestStatus;
+  purpose: CheckoutPurpose;
   reason: string | null;
   denialReason: string | null;
   dueAt: string | null;

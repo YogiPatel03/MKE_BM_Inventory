@@ -14,11 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import hash_password
 from app.core.exceptions import TransactionConflictError
 from app.models.cabinet import Cabinet
+from app.models.checklist import ChecklistItem
 from app.models.item import Item
 from app.models.role import Role
 from app.models.room import Room
+from app.models.transaction import CheckoutPurpose, Transaction
 from app.models.user import User
 from app.services.request_service import approve_request, create_request, deny_request
+from sqlalchemy import select
 
 
 # ─── Shared seed helpers ──────────────────────────────────────────────────────
@@ -126,7 +129,7 @@ async def test_approve_request_sets_fulfilled(db: AsyncSession):
     )
     await db.commit()
 
-    fulfilled = await approve_request(
+    fulfilled, _, _ = await approve_request(
         db,
         request_id=req.id,
         approver_id=coordinator.id,
@@ -153,7 +156,7 @@ async def test_approve_reduces_item_stock(db: AsyncSession):
     )
     await db.commit()
 
-    await approve_request(db, request_id=req.id, approver_id=coordinator.id, due_at=None)
+    await approve_request(db, request_id=req.id, approver_id=coordinator.id, due_at=None)  # tuple, ignore
     await db.commit()
     await db.refresh(item)
 
@@ -174,7 +177,7 @@ async def test_double_approve_raises_conflict(db: AsyncSession):
     )
     await db.commit()
 
-    await approve_request(db, request_id=req.id, approver_id=coordinator.id, due_at=None)
+    await approve_request(db, request_id=req.id, approver_id=coordinator.id, due_at=None)  # tuple, ignore
     await db.commit()
 
     with pytest.raises(TransactionConflictError):
@@ -815,3 +818,340 @@ async def test_submit_request_dm_failure_does_not_affect_response(client: AsyncC
 
     assert r.status_code == 201
     assert r.json()["status"] == "PENDING"
+
+
+# ─── Purpose field tests ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_request_defaults_to_general(client: AsyncClient, db: AsyncSession):
+    """Omitting purpose in the payload defaults the request to GENERAL."""
+    coordinator, requester, item = await _seed(db)
+    alice_token = await _login(client, "alice", "alicepass")
+
+    r = await client.post(
+        "/api/requests",
+        json={"item_id": item.id, "quantity_requested": 1},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert r.status_code == 201
+    assert r.json()["purpose"] == "GENERAL"
+
+
+@pytest.mark.asyncio
+async def test_create_request_persists_sabha_purpose(client: AsyncClient, db: AsyncSession):
+    """Passing purpose=SABHA persists SABHA on the request."""
+    coordinator, requester, item = await _seed(db)
+    alice_token = await _login(client, "alice", "alicepass")
+
+    r = await client.post(
+        "/api/requests",
+        json={"item_id": item.id, "quantity_requested": 1, "purpose": "SABHA"},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert r.status_code == 201
+    assert r.json()["purpose"] == "SABHA"
+
+
+@pytest.mark.asyncio
+async def test_create_request_invalid_purpose_returns_422(client: AsyncClient, db: AsyncSession):
+    """Sending an invalid purpose value must return 422."""
+    coordinator, requester, item = await _seed(db)
+    alice_token = await _login(client, "alice", "alicepass")
+
+    r = await client.post(
+        "/api/requests",
+        json={"item_id": item.id, "quantity_requested": 1, "purpose": "INVALID"},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_approve_general_item_request_no_checklist_task(db: AsyncSession):
+    """Approving a GENERAL item request creates a Transaction but no checklist return task."""
+    coordinator, requester, item = await _seed(db)
+    req = await create_request(
+        db,
+        requester_id=requester.id,
+        item_id=item.id,
+        bin_id=None,
+        quantity_requested=1,
+        reason=None,
+        due_at=None,
+        purpose=CheckoutPurpose.GENERAL,
+    )
+    await db.commit()
+
+    fulfilled, txn, bin_txn = await approve_request(
+        db, request_id=req.id, approver_id=coordinator.id, due_at=None
+    )
+    # Wire checklist tasks (same as the router does)
+    from app.services.checklist_service import add_return_task_for_transaction
+    if txn:
+        await add_return_task_for_transaction(db, txn, requester)
+    await db.commit()
+
+    assert fulfilled.purpose == "GENERAL"
+    assert txn is not None
+    assert txn.purpose == "GENERAL"
+
+    # No auto-generated return task should exist
+    result = await db.execute(
+        select(ChecklistItem).where(
+            ChecklistItem.linked_transaction_id == txn.id,
+            ChecklistItem.is_auto_generated == True,
+        )
+    )
+    tasks = result.scalars().all()
+    assert len(tasks) == 0
+
+
+@pytest.mark.asyncio
+async def test_approve_sabha_item_request_creates_return_task(db: AsyncSession):
+    """Approving a SABHA item request creates an ITEM_RETURN checklist task."""
+    from app.models.checklist import Checklist, Subchecklist
+    coordinator, requester, item = await _seed(db)
+
+    # Requester needs a group for the checklist lookup
+    requester.group_name = "GROUP_1"
+    await db.flush()
+
+    # Create an active checklist for their group
+    from datetime import date
+    checklist = Checklist(group_name="GROUP_1", week_start=date.today(), is_active=True)
+    db.add(checklist)
+    await db.flush()
+    sub = Subchecklist(
+        checklist_id=checklist.id,
+        title="Post Sabha",
+        section_type="POST_SABHA",
+        is_mandatory=True,
+        section_order=1,
+    )
+    db.add(sub)
+    await db.commit()
+
+    req = await create_request(
+        db,
+        requester_id=requester.id,
+        item_id=item.id,
+        bin_id=None,
+        quantity_requested=1,
+        reason=None,
+        due_at=None,
+        purpose=CheckoutPurpose.SABHA,
+    )
+    await db.commit()
+
+    fulfilled, txn, bin_txn = await approve_request(
+        db, request_id=req.id, approver_id=coordinator.id, due_at=None
+    )
+    from app.services.checklist_service import add_return_task_for_transaction
+    if txn:
+        await add_return_task_for_transaction(db, txn, requester)
+    await db.commit()
+
+    assert fulfilled.purpose == "SABHA"
+    assert txn is not None
+    assert txn.purpose == "SABHA"
+
+    result = await db.execute(
+        select(ChecklistItem).where(
+            ChecklistItem.linked_transaction_id == txn.id,
+            ChecklistItem.is_auto_generated == True,
+            ChecklistItem.auto_type == "ITEM_RETURN",
+        )
+    )
+    tasks = result.scalars().all()
+    assert len(tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_approve_sabha_bin_request_creates_bin_return_task(db: AsyncSession):
+    """Approving a SABHA bin request creates exactly one BIN_RETURN checklist task."""
+    from app.models.bin import Bin
+    from app.models.checklist import Checklist, Subchecklist
+    coordinator, requester, item = await _seed(db)
+
+    requester.group_name = "GROUP_1"
+    await db.flush()
+
+    from datetime import date
+    checklist = Checklist(group_name="GROUP_1", week_start=date.today(), is_active=True)
+    db.add(checklist)
+    await db.flush()
+    sub = Subchecklist(
+        checklist_id=checklist.id,
+        title="Post Sabha",
+        section_type="POST_SABHA",
+        is_mandatory=True,
+        section_order=1,
+    )
+    db.add(sub)
+    await db.flush()
+
+    # Move item into a bin
+    bin_obj = Bin(cabinet_id=item.cabinet_id, label="Bin X", requires_full_bin_checkout=True)
+    db.add(bin_obj)
+    await db.flush()
+    item.bin_id = bin_obj.id
+    await db.commit()
+    await db.refresh(bin_obj)
+
+    req = await create_request(
+        db,
+        requester_id=requester.id,
+        item_id=None,
+        bin_id=bin_obj.id,
+        quantity_requested=1,
+        reason=None,
+        due_at=None,
+        purpose=CheckoutPurpose.SABHA,
+    )
+    await db.commit()
+
+    fulfilled, txn, bin_txn = await approve_request(
+        db, request_id=req.id, approver_id=coordinator.id, due_at=None
+    )
+    from app.services.checklist_service import add_return_task_for_bin_transaction
+    if bin_txn:
+        await add_return_task_for_bin_transaction(db, bin_txn, requester)
+    await db.commit()
+
+    assert fulfilled.purpose == "SABHA"
+    assert bin_txn is not None
+    assert bin_txn.purpose == "SABHA"
+
+    result = await db.execute(
+        select(ChecklistItem).where(
+            ChecklistItem.linked_bin_transaction_id == bin_txn.id,
+            ChecklistItem.is_auto_generated == True,
+            ChecklistItem.auto_type == "BIN_RETURN",
+        )
+    )
+    tasks = result.scalars().all()
+    assert len(tasks) == 1
+
+
+# ─── bin_id server-side validation tests ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_request_nonexistent_bin_id_raises_not_found(db: AsyncSession):
+    """create_request raises NotFoundError for a bin_id that does not exist."""
+    from app.core.exceptions import NotFoundError as NFE
+    coordinator, requester, item = await _seed(db)
+
+    with pytest.raises(NFE):
+        await create_request(
+            db,
+            requester_id=requester.id,
+            item_id=None,
+            bin_id=99999,
+            quantity_requested=1,
+            reason=None,
+            due_at=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_request_nonexistent_bin_id_no_row_persisted(db: AsyncSession):
+    """No InventoryRequest row is flushed when bin_id does not exist."""
+    from app.core.exceptions import NotFoundError as NFE
+    from app.models.inventory_request import InventoryRequest
+    coordinator, requester, item = await _seed(db)
+
+    with pytest.raises(NFE):
+        await create_request(
+            db,
+            requester_id=requester.id,
+            item_id=None,
+            bin_id=99999,
+            quantity_requested=1,
+            reason=None,
+            due_at=None,
+        )
+
+    result = await db.execute(select(InventoryRequest))
+    assert result.scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_create_request_nonexistent_bin_id_http_returns_404(
+    client: AsyncClient, db: AsyncSession
+):
+    """HTTP POST /api/requests with a nonexistent bin_id returns 404."""
+    coordinator, requester, item = await _seed(db)
+    alice_token = await _login(client, "alice", "alicepass")
+
+    r = await client.post(
+        "/api/requests",
+        json={"bin_id": 99999, "quantity_requested": 1},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_request_falsy_bin_id_zero_raises_not_found(db: AsyncSession):
+    """bin_id=0 is a provided nonexistent id and must raise NotFoundError, not be skipped."""
+    from app.core.exceptions import NotFoundError as NFE
+    coordinator, requester, item = await _seed(db)
+
+    with pytest.raises(NFE):
+        await create_request(
+            db,
+            requester_id=requester.id,
+            item_id=None,
+            bin_id=0,
+            quantity_requested=1,
+            reason=None,
+            due_at=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_request_falsy_bin_id_zero_http_rejected(
+    client: AsyncClient, db: AsyncSession
+):
+    """HTTP POST /api/requests with bin_id=0 is rejected (422 from schema, never reaches service)."""
+    coordinator, requester, item = await _seed(db)
+    alice_token = await _login(client, "alice", "alicepass")
+
+    r = await client.post(
+        "/api/requests",
+        json={"bin_id": 0, "quantity_requested": 1},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # The schema's model_validator treats bin_id=0 as falsy (no bin provided),
+    # so it raises 422 before reaching the service-layer is-not-None guard.
+    assert r.status_code in (404, 422)
+
+
+@pytest.mark.asyncio
+async def test_create_request_valid_bin_id_still_works(db: AsyncSession):
+    """create_request succeeds and preserves purpose for a valid bin_id."""
+    from app.models.bin import Bin
+    coordinator, requester, item = await _seed(db)
+
+    bin_obj = Bin(cabinet_id=item.cabinet_id, label="Bin Valid", requires_full_bin_checkout=True)
+    db.add(bin_obj)
+    await db.flush()
+    item.bin_id = bin_obj.id
+    await db.commit()
+    await db.refresh(bin_obj)
+
+    req = await create_request(
+        db,
+        requester_id=requester.id,
+        item_id=None,
+        bin_id=bin_obj.id,
+        quantity_requested=1,
+        reason="test",
+        due_at=None,
+        purpose=CheckoutPurpose.SABHA,
+    )
+    await db.commit()
+
+    assert req.bin_id == bin_obj.id
+    assert req.status == "PENDING"
+    assert req.purpose == "SABHA"

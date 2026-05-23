@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  ClipboardCheck,
   ClipboardList,
   DoorOpen,
   FileText,
@@ -47,10 +46,9 @@ export function MobileNav() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [moreOpen]);
 
-  // Primary tabs (always visible) — order: Inventory, Checklist, Home, Requests, More
+  // Primary tabs (always visible) — order: Inventory, Home, Requests, More
   const primaryItems = [
     { to: "/inventory", label: "Inventory", icon: PackageSearch },
-    { to: "/checklist", label: "Checklist", icon: ClipboardCheck },
     { to: "/dashboard", label: "Home", icon: LayoutDashboard },
     { to: "/requests", label: "Requests", icon: Inbox },
   ];

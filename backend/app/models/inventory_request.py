@@ -4,10 +4,11 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.models.transaction import CheckoutPurpose
 
 if TYPE_CHECKING:
     from app.models.bin import Bin
@@ -37,6 +38,9 @@ class InventoryRequest(Base):
     """
 
     __tablename__ = "inventory_requests"
+    __table_args__ = (
+        CheckConstraint("purpose IN ('GENERAL', 'SABHA')", name="ck_inventory_request_purpose_valid"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     requester_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
@@ -54,6 +58,10 @@ class InventoryRequest(Base):
     quantity_requested: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=1)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=RequestStatus.PENDING.value, index=True
+    )
+
+    purpose: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=CheckoutPurpose.GENERAL, server_default="GENERAL"
     )
 
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
