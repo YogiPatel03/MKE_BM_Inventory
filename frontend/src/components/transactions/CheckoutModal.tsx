@@ -4,7 +4,7 @@ import { X } from "lucide-react";
 import { checkout } from "@/api/transactions";
 import { useAuthStore } from "@/store/auth";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
-import type { Item } from "@/types";
+import type { CheckoutPurpose, Item } from "@/types";
 
 interface Props {
   item: Item;
@@ -18,6 +18,7 @@ export function CheckoutModal({ item, onClose }: Props) {
   const [quantity, setQuantity] = useState(1.0);
   const [dueAt, setDueAt] = useState("");
   const [notes, setNotes] = useState("");
+  const [purpose, setPurpose] = useState<CheckoutPurpose>("GENERAL");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   useEscapeKey(onClose);
@@ -34,9 +35,12 @@ export function CheckoutModal({ item, onClose }: Props) {
         quantity,
         dueAt: dueAt || undefined,
         notes: notes || undefined,
+        purpose,
       });
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["transactions"] });
+      qc.invalidateQueries({ queryKey: ["checklists"] });
+      qc.invalidateQueries({ queryKey: ["checklist"] });
       onClose();
     } catch (e: any) {
       setError(e?.response?.data?.detail ?? "Checkout failed");
@@ -108,6 +112,31 @@ export function CheckoutModal({ item, onClose }: Props) {
               className="input resize-none"
               placeholder="Purpose, project, etc."
             />
+          </div>
+
+          <div>
+            <p className="label mb-1.5">Checkout purpose</p>
+            <div className="flex gap-2">
+              {(["GENERAL", "SABHA"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setPurpose(p)}
+                  className={`flex-1 rounded-lg border px-3 py-2.5 text-sm font-medium text-left transition-colors ${
+                    purpose === p
+                      ? "border-brand-600 bg-brand-50 text-brand-700"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                  }`}
+                >
+                  <span className="block">{p === "GENERAL" ? "General use" : "Sabha"}</span>
+                  <span className="block text-xs font-normal mt-0.5 text-slate-400">
+                    {p === "GENERAL"
+                      ? "Does not appear on the Sabha checklist."
+                      : "Adds this item to the Sabha return checklist."}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {error && (

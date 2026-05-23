@@ -38,7 +38,7 @@ from app.models.receipt_record import ReceiptRecord
 from app.models.transaction import Transaction, TransactionStatus
 from app.models.transaction_photo import TransactionPhoto
 from app.models.user import User
-from app.services.telegram_service import get_bot, notify_account_linked
+from app.services.telegram_service import get_bot, notify_account_linked, notify_checklist_item_status_changed
 
 log = logging.getLogger(__name__)
 
@@ -1012,11 +1012,11 @@ async def cmd_done(ctx: BotContext, task_id_str: str, note: Optional[str], db: A
         return
 
     if not can_complete_on(user, task.checklist):
-        await _send(
-            ctx.reply_chat_id,
-            "❌ You must be assigned to this checklist to mark tasks done.",
-            message_thread_id=ctx.message_thread_id,
-        )
+        if any(a.user_id == user.id for a in task.checklist.assignments):
+            denial_msg = "❌ You can only mark tasks done on checklists for your own group."
+        else:
+            denial_msg = "❌ You must be assigned to this checklist to mark tasks done."
+        await _send(ctx.reply_chat_id, denial_msg, message_thread_id=ctx.message_thread_id)
         return
 
     if task.is_completed:
@@ -1024,7 +1024,7 @@ async def cmd_done(ctx: BotContext, task_id_str: str, note: Optional[str], db: A
         return
 
     try:
-        await complete_checklist_item(db, item_id=task_id, user_id=user.id, notes=note)
+        task, transitioned = await complete_checklist_item(db, item_id=task_id, user_id=user.id, notes=note)
         await db.commit()
     except Exception:
         await db.rollback()
@@ -1034,11 +1034,16 @@ async def cmd_done(ctx: BotContext, task_id_str: str, note: Optional[str], db: A
 
     note_str = f" — {_html.escape(note)}" if note else ""
     await _send(ctx.reply_chat_id, f"✅ Task #{task_id} marked complete{note_str}.", message_thread_id=ctx.message_thread_id)
+    if transitioned:
+        try:
+            await notify_checklist_item_status_changed(task, task.checklist, user, "completed")
+        except Exception:
+            log.exception("notify_checklist_item_status_changed failed for task_id=%s", task_id)
 
 
 async def cmd_undo(ctx: BotContext, task_id_str: str, reason: Optional[str], db: AsyncSession) -> None:
     """Mark a checklist task incomplete again."""
-    from app.bot.checklist_helpers import can_view_checklist
+    from app.bot.checklist_helpers import can_view_checklist, can_complete_on
 
     user = await _resolve_actor(ctx, db)
     if not user:
@@ -1074,20 +1079,13 @@ async def cmd_undo(ctx: BotContext, task_id_str: str, reason: Optional[str], db:
         await _send(ctx.reply_chat_id, f"⬜ Task #{task_id} is already incomplete.", message_thread_id=ctx.message_thread_id)
         return
 
-    # Permission: admin/coordinator, group lead on this checklist, or the user who completed it
-    can_manage = user.role.can_manage_users or user.role.can_manage_inventory
+    # Permission: same rule as /done and HTTP incomplete — currently assigned + same group for
+    # non-managers. Managers (can_manage_inventory or can_manage_users) bypass this check.
     checklist = task.checklist
-    is_group_lead_here = (
-        user.role.can_approve_requests
-        and any(a.user_id == user.id for a in checklist.assignments)
-        and user.group_name == checklist.group_name
-    )
-    is_own_completion = task.completed_by_user_id == user.id
-
-    if not can_manage and not is_group_lead_here and not is_own_completion:
+    if not can_complete_on(user, checklist):
         await _send(
             ctx.reply_chat_id,
-            "❌ Permission denied. You can undo tasks you completed yourself, or contact a coordinator.",
+            "❌ Permission denied. You must be assigned to this checklist to undo tasks.",
             message_thread_id=ctx.message_thread_id,
         )
         return
@@ -1106,6 +1104,10 @@ async def cmd_undo(ctx: BotContext, task_id_str: str, reason: Optional[str], db:
         return
 
     await _send(ctx.reply_chat_id, f"↩️ Task #{task_id} marked incomplete.", message_thread_id=ctx.message_thread_id)
+    try:
+        await notify_checklist_item_status_changed(task, task.checklist, user, "incomplete")
+    except Exception:
+        log.exception("notify_checklist_item_status_changed failed for task_id=%s", task_id)
 
 
 async def cmd_claim(ctx: BotContext, task_id_str: str, db: AsyncSession) -> None:

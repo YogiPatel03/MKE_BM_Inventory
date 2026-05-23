@@ -13,6 +13,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,13 +21,15 @@ from app.models.bin_transaction import BinTransaction
 from app.models.checklist import (
     Checklist,
     ChecklistAssignment,
+    ChecklistAssignmentDefault,
     ChecklistItem,
     GroupName,
     Subchecklist,
     SubchecklistType,
+    sabha_date_for_week,
 )
 from app.models.item import Item
-from app.models.transaction import Transaction
+from app.models.transaction import CheckoutPurpose, Transaction
 from app.models.user import User
 
 log = logging.getLogger(__name__)
@@ -148,14 +151,18 @@ async def get_or_create_weekly_checklists(db: AsyncSession) -> list[Checklist]:
             )
         )
         checklist = result.scalar_one_or_none()
+        was_created = False
         if not checklist:
             checklist = Checklist(group_name=group, week_start=monday, is_active=True)
             db.add(checklist)
             await db.flush()
+            was_created = True
             log.info("Auto-generated checklist: group=%s week=%s id=%d", group, monday, checklist.id)
 
         # Ensure mandatory subchecklists exist
         await _ensure_mandatory_subchecklists(db, checklist)
+        if was_created:
+            await copy_active_defaults_to_checklist(db, checklist)
         created.append(checklist)
 
     return created
@@ -175,13 +182,17 @@ async def get_current_checklist_for_group(
         )
     )
     checklist = result.scalar_one_or_none()
+    was_created = False
     if not checklist:
         checklist = Checklist(group_name=group_name, week_start=monday, is_active=True)
         db.add(checklist)
         await db.flush()
+        was_created = True
 
     # Ensure mandatory subchecklists
     await _ensure_mandatory_subchecklists(db, checklist)
+    if was_created:
+        await copy_active_defaults_to_checklist(db, checklist)
     return checklist
 
 
@@ -206,18 +217,35 @@ async def add_return_task_for_transaction(
     db: AsyncSession,
     transaction: Transaction,
     user: User,
-) -> Optional[ChecklistItem]:
+) -> tuple[Optional[ChecklistItem], bool]:
     """
     When a non-consumable item is checked out, add a return task to the
     Post Sabha subchecklist of the borrower's group's current-week checklist.
-    Returns the created ChecklistItem, or None if user has no group.
+
+    Returns (task, created_new) where created_new is True only when this call
+    actually inserted the row.  Returns (None, False) for GENERAL purpose or
+    when the user has no group.  Returns (existing, False) when a task already
+    exists (pre-check hit or unique-index race recovered via IntegrityError).
     """
+    if transaction.purpose != CheckoutPurpose.SABHA:
+        return None, False
+
     if not user.group_name:
-        return None
+        return None, False
 
     checklist = await get_current_checklist_for_group(db, user.group_name)
     if not checklist:
-        return None
+        return None, False
+
+    # Pre-check: return existing task if one already exists for this transaction.
+    existing_result = await db.execute(
+        select(ChecklistItem).where(
+            ChecklistItem.linked_transaction_id == transaction.id,
+            ChecklistItem.is_auto_generated == True,
+        )
+    )
+    if existing := existing_result.scalar_one_or_none():
+        return existing, False
 
     post_sabha = await _get_post_sabha_subchecklist(db, checklist)
 
@@ -249,31 +277,50 @@ async def add_return_task_for_transaction(
         auto_type="ITEM_RETURN",
         linked_transaction_id=transaction.id,
     )
-    db.add(task)
-    await db.flush()
+    try:
+        async with db.begin_nested():
+            db.add(task)
+            await db.flush()
+    except IntegrityError:
+        # Another writer raced us; fetch and return the winner's row.
+        result = await db.execute(
+            select(ChecklistItem).where(
+                ChecklistItem.linked_transaction_id == transaction.id,
+                ChecklistItem.is_auto_generated == True,
+            )
+        )
+        return result.scalar_one_or_none(), False
     log.info(
         "Auto-created return task: checklist=%d txn=%d item=%s subchecklist=%s",
         checklist.id, transaction.id, item_name,
         post_sabha.id if post_sabha else "none",
     )
-    return task
+    return task, True
 
 
 async def add_return_task_for_bin_transaction(
     db: AsyncSession,
     bin_transaction: BinTransaction,
     user: User,
-) -> Optional[ChecklistItem]:
+) -> tuple[Optional[ChecklistItem], bool]:
     """
     When a bin is checked out, add a return task to the Post Sabha subchecklist
     of the borrower's group's current-week checklist.
+
+    Returns (task, created_new) where created_new is True only when this call
+    actually inserted the row.  Returns (None, False) for GENERAL purpose or
+    when the user has no group.  Returns (existing, False) when a task already
+    exists (pre-check hit or unique-index race recovered via IntegrityError).
     """
+    if bin_transaction.purpose != CheckoutPurpose.SABHA:
+        return None, False
+
     if not user.group_name:
-        return None
+        return None, False
 
     checklist = await get_current_checklist_for_group(db, user.group_name)
     if not checklist:
-        return None
+        return None, False
 
     post_sabha = await _get_post_sabha_subchecklist(db, checklist)
 
@@ -281,6 +328,16 @@ async def add_return_task_for_bin_transaction(
     bin_result = await db.execute(select(Bin).where(Bin.id == bin_transaction.bin_id))
     bin_obj = bin_result.scalar_one_or_none()
     bin_label = bin_obj.label if bin_obj else f"Bin #{bin_transaction.bin_id}"
+
+    # Pre-check: return existing task if one already exists for this bin transaction.
+    existing_result = await db.execute(
+        select(ChecklistItem).where(
+            ChecklistItem.linked_bin_transaction_id == bin_transaction.id,
+            ChecklistItem.is_auto_generated == True,
+        )
+    )
+    if existing := existing_result.scalar_one_or_none():
+        return existing, False
 
     count_result = await db.execute(
         select(ChecklistItem).where(
@@ -300,14 +357,25 @@ async def add_return_task_for_bin_transaction(
         auto_type="BIN_RETURN",
         linked_bin_transaction_id=bin_transaction.id,
     )
-    db.add(task)
-    await db.flush()
+    try:
+        async with db.begin_nested():
+            db.add(task)
+            await db.flush()
+    except IntegrityError:
+        # Another writer raced us; fetch and return the winner's row.
+        result = await db.execute(
+            select(ChecklistItem).where(
+                ChecklistItem.linked_bin_transaction_id == bin_transaction.id,
+                ChecklistItem.is_auto_generated == True,
+            )
+        )
+        return result.scalar_one_or_none(), False
     log.info(
         "Auto-created bin return task: checklist=%d bin_txn=%d subchecklist=%s",
         checklist.id, bin_transaction.id,
         post_sabha.id if post_sabha else "none",
     )
-    return task
+    return task, True
 
 
 async def auto_complete_return_task_for_transaction(
@@ -376,14 +444,29 @@ async def complete_checklist_item(
     user_id: int,
     notes: Optional[str],
     request_telegram_proof: bool = False,
-) -> ChecklistItem:
-    """Mark a checklist item as completed by a user."""
+) -> tuple[ChecklistItem, bool]:
+    """
+    Mark a checklist item as completed by a user.
+
+    Returns (task, transition_occurred) where transition_occurred is True only
+    on an incomplete→complete transition.  Already-completed items are returned
+    unchanged so callers never overwrite the original audit metadata (completed_at,
+    completed_by_user_id, completion_notes).
+
+    Uses SELECT … FOR UPDATE so concurrent requests serialize on the row and only
+    one of them performs the write.
+    """
     from app.core.exceptions import NotFoundError
 
-    result = await db.execute(select(ChecklistItem).where(ChecklistItem.id == item_id))
+    result = await db.execute(
+        select(ChecklistItem).where(ChecklistItem.id == item_id).with_for_update()
+    )
     task = result.scalar_one_or_none()
     if not task:
         raise NotFoundError("ChecklistItem", item_id)
+
+    if task.is_completed:
+        return task, False
 
     now = datetime.now(timezone.utc)
     task.is_completed = True
@@ -394,4 +477,126 @@ async def complete_checklist_item(
     if request_telegram_proof:
         task.photo_requested_via_telegram = True
 
-    return task
+    return task, True
+
+
+# ── Recurring default assignee management ─────────────────────────────────────
+
+async def copy_active_defaults_to_checklist(db: AsyncSession, checklist: Checklist) -> int:
+    """
+    Copy active default assignees for a group into a newly-created weekly checklist.
+    Call this only when the checklist row was just created — not on re-generation.
+    """
+    result = await db.execute(
+        select(ChecklistAssignmentDefault).where(
+            ChecklistAssignmentDefault.group_name == checklist.group_name,
+            ChecklistAssignmentDefault.is_active == True,
+        )
+    )
+    defaults = result.scalars().all()
+    count = 0
+    for default in defaults:
+        assignment = ChecklistAssignment(
+            checklist_id=checklist.id,
+            user_id=default.user_id,
+            assigned_by_id=default.assigned_by_id,
+        )
+        db.add(assignment)
+        count += 1
+    if count:
+        await db.flush()
+    log.info(
+        "Copied %d default assignees to checklist=%d group=%s",
+        count, checklist.id, checklist.group_name,
+    )
+    return count
+
+
+async def list_checklist_defaults(
+    db: AsyncSession, group_name: str
+) -> list[ChecklistAssignmentDefault]:
+    """List active recurring default assignees for a group."""
+    result = await db.execute(
+        select(ChecklistAssignmentDefault)
+        .where(
+            ChecklistAssignmentDefault.group_name == group_name,
+            ChecklistAssignmentDefault.is_active == True,
+        )
+        .options(
+            selectinload(ChecklistAssignmentDefault.user),
+            selectinload(ChecklistAssignmentDefault.assigned_by),
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def list_checklists_historical(
+    db: AsyncSession,
+    group_name: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+) -> list[Checklist]:
+    """
+    Fetch checklists across all dates (including archived) for reporting.
+    start_date/end_date filter on sabha_date (computed in Python after fetch).
+    """
+    query = (
+        select(Checklist)
+        .options(
+            selectinload(Checklist.items),
+            selectinload(Checklist.assignments).selectinload(ChecklistAssignment.user),
+        )
+        .order_by(Checklist.week_start.desc(), Checklist.group_name)
+    )
+    if group_name:
+        query = query.where(Checklist.group_name == group_name)
+
+    rows = list((await db.execute(query)).scalars().all())
+
+    if start_date or end_date:
+        filtered = []
+        for cl in rows:
+            sabha = sabha_date_for_week(cl.week_start)
+            if start_date and sabha < start_date:
+                continue
+            if end_date and sabha > end_date:
+                continue
+            filtered.append(cl)
+        rows = filtered
+
+    return rows
+
+
+async def add_checklist_default(
+    db: AsyncSession,
+    group_name: str,
+    user_id: int,
+    assigned_by_id: int,
+) -> ChecklistAssignmentDefault:
+    """
+    Add a recurring default assignee for a group.
+    Raises TransactionConflictError if an active default already exists for (group, user).
+    """
+    from app.core.exceptions import TransactionConflictError
+
+    existing = (await db.execute(
+        select(ChecklistAssignmentDefault).where(
+            ChecklistAssignmentDefault.group_name == group_name,
+            ChecklistAssignmentDefault.user_id == user_id,
+            ChecklistAssignmentDefault.is_active == True,
+        )
+    )).scalar_one_or_none()
+
+    if existing:
+        raise TransactionConflictError("User is already an active default assignee for this group")
+
+    default = ChecklistAssignmentDefault(
+        group_name=group_name,
+        user_id=user_id,
+        assigned_by_id=assigned_by_id,
+        is_active=True,
+    )
+    db.add(default)
+    await db.flush()
+    await db.refresh(default, ["user", "assigned_by"])
+    return default

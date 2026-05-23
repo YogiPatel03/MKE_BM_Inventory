@@ -19,15 +19,20 @@ import {
   getChecklist,
   addChecklistItem,
   completeChecklistItem,
+  incompleteChecklistItem,
   deleteChecklistItem,
   assignUser,
   unassignUser,
   backfillActiveTransactions,
   createSubchecklist,
+  listChecklistDefaults,
+  addChecklistDefault,
+  removeChecklistDefault,
 } from "@/api/checklists";
 import { listUsers } from "@/api/users";
 import { useAuthStore } from "@/store/auth";
-import type { Checklist, ChecklistItem, GroupName, Subchecklist } from "@/types";
+import { formatSabhaDate } from "@/utils/checklistDateHelpers";
+import type { Checklist, ChecklistAssignmentDefault, ChecklistItem, GroupName, Subchecklist } from "@/types";
 import { GROUP_DISPLAY, GROUP_NAMES } from "@/types";
 
 function useCanManage() {
@@ -47,6 +52,19 @@ function useCanAddItems() {
 function useCanAssign() {
   const user = useAuthStore((s) => s.user);
   return (user?.role.canManageUsers || user?.role.canManageInventory || user?.role.canApproveRequests) ?? false;
+}
+
+function useCanManageDefaults(groupName: GroupName): boolean {
+  const user = useAuthStore((s) => s.user);
+  if (!user) return false;
+  if (user.role.canManageUsers || user.role.canManageInventory) return true;
+  return user.role.canApproveRequests && user.groupName === groupName;
+}
+
+function useIsAdminOrCoordinator(): boolean {
+  const user = useAuthStore((s) => s.user);
+  if (!user) return false;
+  return user.role.canManageUsers || user.role.canManageInventory;
 }
 
 // ── Add Item Modal ────────────────────────────────────────────────────────────
@@ -286,7 +304,7 @@ function CompleteModal({
   );
 }
 
-// ── Assign User Modal ─────────────────────────────────────────────────────────
+// ── Assign User Modal (This week + Every week tabs) ───────────────────────────
 
 function AssignModal({
   checklist,
@@ -296,40 +314,91 @@ function AssignModal({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [userId, setUserId] = useState<number | "">("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const canManageDefaults = useCanManageDefaults(checklist.groupName);
+  const isAdminOrCoordinator = useIsAdminOrCoordinator();
+
+  const [activeTab, setActiveTab] = useState<"thisWeek" | "everyWeek">("thisWeek");
+
+  // This-week state
+  const [weeklyUserId, setWeeklyUserId] = useState<number | "">("");
+  const [weeklyLoading, setWeeklyLoading] = useState(false);
+  const [weeklyError, setWeeklyError] = useState("");
+
+  // Every-week state
+  const [defaultUserId, setDefaultUserId] = useState<number | "">("");
+  const [defaultLoading, setDefaultLoading] = useState(false);
+  const [defaultError, setDefaultError] = useState("");
 
   const { data: allUsers = [] } = useQuery({
     queryKey: ["users"],
     queryFn: listUsers,
   });
 
-  const assignedIds = new Set(checklist.assignments.map((a) => a.userId));
-  const available = allUsers.filter((u) => u.isActive && !assignedIds.has(u.id));
+  const { data: defaults = [], isLoading: defaultsLoading } = useQuery({
+    queryKey: ["checklist-defaults", checklist.groupName],
+    queryFn: () => listChecklistDefaults(checklist.groupName),
+    enabled: canManageDefaults,
+  });
 
-  const handleAssign = async () => {
-    if (!userId) return;
-    setLoading(true);
-    setError("");
+  // This-week: users not yet assigned to this checklist
+  const assignedIds = new Set(checklist.assignments.map((a) => a.userId));
+  const availableForWeek = allUsers.filter((u) => u.isActive && !assignedIds.has(u.id));
+
+  // Every-week: users not already a default; group leads can only add same-group users
+  const defaultUserIds = new Set(defaults.map((d) => d.userId));
+  const availableForDefault = allUsers.filter((u) => {
+    if (!u.isActive || defaultUserIds.has(u.id)) return false;
+    if (!isAdminOrCoordinator) return u.groupName === checklist.groupName;
+    return true;
+  });
+
+  const handleWeeklyAssign = async () => {
+    if (!weeklyUserId) return;
+    setWeeklyLoading(true);
+    setWeeklyError("");
     try {
-      await assignUser(checklist.id, userId as number);
+      await assignUser(checklist.id, weeklyUserId as number);
       qc.invalidateQueries({ queryKey: ["checklist", checklist.id] });
-      onClose();
+      setWeeklyUserId("");
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? "Failed to assign user");
+      setWeeklyError(e?.response?.data?.detail ?? "Failed to assign user");
     } finally {
-      setLoading(false);
+      setWeeklyLoading(false);
     }
   };
 
-  const handleUnassign = async (uid: number) => {
-    setError("");
+  const handleWeeklyUnassign = async (uid: number) => {
+    setWeeklyError("");
     try {
       await unassignUser(checklist.id, uid);
       qc.invalidateQueries({ queryKey: ["checklist", checklist.id] });
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? "Failed to unassign user");
+      setWeeklyError(e?.response?.data?.detail ?? "Failed to unassign user");
+    }
+  };
+
+  const handleAddDefault = async () => {
+    if (!defaultUserId) return;
+    setDefaultLoading(true);
+    setDefaultError("");
+    try {
+      await addChecklistDefault(checklist.groupName, defaultUserId as number);
+      qc.invalidateQueries({ queryKey: ["checklist-defaults", checklist.groupName] });
+      setDefaultUserId("");
+    } catch (e: any) {
+      setDefaultError(e?.response?.data?.detail ?? "Failed to add recurring assignee");
+    } finally {
+      setDefaultLoading(false);
+    }
+  };
+
+  const handleRemoveDefault = async (d: ChecklistAssignmentDefault) => {
+    setDefaultError("");
+    try {
+      await removeChecklistDefault(d.id);
+      qc.invalidateQueries({ queryKey: ["checklist-defaults", checklist.groupName] });
+    } catch (e: any) {
+      setDefaultError(e?.response?.data?.detail ?? "Failed to remove recurring assignee");
     }
   };
 
@@ -341,50 +410,147 @@ function AssignModal({
         </button>
         <h2 className="text-lg font-semibold text-slate-900 mb-4">Manage Assignments</h2>
 
-        {checklist.assignments.length > 0 && (
-          <div className="mb-4">
-            <p className="text-xs text-slate-500 uppercase font-medium mb-2">Currently assigned</p>
-            <div className="space-y-1">
-              {checklist.assignments.map((a) => (
-                <div key={a.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg bg-slate-50">
-                  <span className="text-sm text-slate-800">{a.user.fullName}</span>
-                  <button
-                    onClick={() => handleUnassign(a.userId)}
-                    className="text-slate-400 hover:text-red-600 p-0.5"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {available.length > 0 && (
-          <div className="space-y-3">
-            <p className="text-xs text-slate-500 uppercase font-medium">Add assignee</p>
-            <select
-              className="input"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value ? Number(e.target.value) : "")}
-            >
-              <option value="">Select user…</option>
-              {available.map((u) => (
-                <option key={u.id} value={u.id}>{u.fullName} ({u.username})</option>
-              ))}
-            </select>
+        {/* Tab bar — only shown to users who can manage defaults */}
+        {canManageDefaults && (
+          <div className="flex gap-1 bg-slate-100 rounded-lg p-1 mb-4">
             <button
-              onClick={handleAssign}
-              disabled={!userId || loading}
-              className="btn-primary w-full justify-center"
+              onClick={() => setActiveTab("thisWeek")}
+              className={`flex-1 py-1.5 text-sm rounded-md transition-colors ${
+                activeTab === "thisWeek"
+                  ? "bg-white shadow-sm font-medium text-slate-900"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
             >
-              {loading ? "Assigning…" : "Assign"}
+              This week only
+            </button>
+            <button
+              onClick={() => setActiveTab("everyWeek")}
+              className={`flex-1 py-1.5 text-sm rounded-md transition-colors ${
+                activeTab === "everyWeek"
+                  ? "bg-white shadow-sm font-medium text-slate-900"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Every week
             </button>
           </div>
         )}
 
-        {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mt-2">{error}</p>}
-        <button onClick={onClose} className="btn-secondary w-full justify-center mt-3">Done</button>
+        {/* ── This week only ───────────────────────────────────── */}
+        {(!canManageDefaults || activeTab === "thisWeek") && (
+          <div className="space-y-3">
+            {canManageDefaults && (
+              <p className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
+                Changes here affect only this Sabha checklist.
+              </p>
+            )}
+
+            {checklist.assignments.length > 0 && (
+              <div>
+                <p className="text-xs text-slate-500 uppercase font-medium mb-2">Currently assigned</p>
+                <div className="space-y-1">
+                  {checklist.assignments.map((a) => (
+                    <div key={a.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg bg-slate-50">
+                      <span className="text-sm text-slate-800">{a.user.fullName}</span>
+                      <button
+                        onClick={() => handleWeeklyUnassign(a.userId)}
+                        className="text-slate-400 hover:text-red-600 p-0.5"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {availableForWeek.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-500 uppercase font-medium">Add assignee</p>
+                <select
+                  className="input"
+                  value={weeklyUserId}
+                  onChange={(e) => setWeeklyUserId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  <option value="">Select user…</option>
+                  {availableForWeek.map((u) => (
+                    <option key={u.id} value={u.id}>{u.fullName} ({u.username})</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleWeeklyAssign}
+                  disabled={!weeklyUserId || weeklyLoading}
+                  className="btn-primary w-full justify-center"
+                >
+                  {weeklyLoading ? "Assigning…" : "Assign this week"}
+                </button>
+              </div>
+            )}
+
+            {weeklyError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{weeklyError}</p>}
+          </div>
+        )}
+
+        {/* ── Every week defaults ──────────────────────────────── */}
+        {canManageDefaults && activeTab === "everyWeek" && (
+          <div className="space-y-3">
+            <p className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
+              Every week assignees are automatically added to new weekly checklists. Changes here don't affect this week.
+            </p>
+
+            {defaultsLoading ? (
+              <div className="py-4 flex justify-center">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
+              </div>
+            ) : defaults.length > 0 ? (
+              <div>
+                <p className="text-xs text-slate-500 uppercase font-medium mb-2">Recurring assignees</p>
+                <div className="space-y-1">
+                  {defaults.map((d) => (
+                    <div key={d.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg bg-slate-50">
+                      <span className="text-sm text-slate-800">{d.user.fullName}</span>
+                      <button
+                        onClick={() => handleRemoveDefault(d)}
+                        className="text-slate-400 hover:text-red-600 p-0.5"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400 italic text-center py-2">No recurring assignees set.</p>
+            )}
+
+            {availableForDefault.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-500 uppercase font-medium">Add recurring assignee</p>
+                <select
+                  className="input"
+                  value={defaultUserId}
+                  onChange={(e) => setDefaultUserId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  <option value="">Select user…</option>
+                  {availableForDefault.map((u) => (
+                    <option key={u.id} value={u.id}>{u.fullName} ({u.username})</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleAddDefault}
+                  disabled={!defaultUserId || defaultLoading}
+                  className="btn-primary w-full justify-center"
+                >
+                  {defaultLoading ? "Adding…" : "Add every week"}
+                </button>
+              </div>
+            )}
+
+            {defaultError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{defaultError}</p>}
+          </div>
+        )}
+
+        <button onClick={onClose} className="btn-secondary w-full justify-center mt-4">Done</button>
       </div>
     </div>
   );
@@ -394,17 +560,42 @@ function AssignModal({
 
 function TaskRow({
   item,
+  checklistId,
   canComplete,
   canDelete,
   onComplete,
   onDelete,
 }: {
   item: ChecklistItem;
+  checklistId: number;
   canComplete: boolean;
   canDelete: boolean;
   onComplete: (item: ChecklistItem) => void;
   onDelete: (itemId: number) => void;
 }) {
+  const qc = useQueryClient();
+  const [incompleteLoading, setIncompleteLoading] = useState(false);
+
+  // Auto-generated return tasks cannot be marked incomplete — the backend will 409.
+  const canUndo =
+    item.isCompleted &&
+    canComplete &&
+    !(item.isAutoGenerated && (item.autoType === "ITEM_RETURN" || item.autoType === "BIN_RETURN"));
+
+  const handleIncomplete = async () => {
+    if (incompleteLoading) return;
+    setIncompleteLoading(true);
+    try {
+      await incompleteChecklistItem(checklistId, item.id);
+      qc.invalidateQueries({ queryKey: ["checklist", checklistId] });
+      qc.invalidateQueries({ queryKey: ["checklists"] });
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? "Failed to mark incomplete");
+    } finally {
+      setIncompleteLoading(false);
+    }
+  };
+
   return (
     <div className={`px-4 py-3 flex items-start gap-3 ${item.isCompleted ? "bg-green-50/50" : ""}`}>
       <div className="flex-shrink-0 mt-0.5">
@@ -454,6 +645,15 @@ function TaskRow({
             Complete
           </button>
         )}
+        {canUndo && (
+          <button
+            onClick={handleIncomplete}
+            disabled={incompleteLoading}
+            className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded hover:bg-slate-100 transition-colors disabled:opacity-50"
+          >
+            {incompleteLoading ? "…" : "Undo"}
+          </button>
+        )}
         {!item.isAutoGenerated && canDelete && (
           <button
             onClick={() => onDelete(item.id)}
@@ -472,12 +672,14 @@ function TaskRow({
 
 function SubchecklistSection({
   sub,
+  checklistId,
   canComplete,
   canDelete,
   onComplete,
   onDelete,
 }: {
   sub: Subchecklist;
+  checklistId: number;
   canComplete: boolean;
   canDelete: boolean;
   onComplete: (item: ChecklistItem) => void;
@@ -526,6 +728,7 @@ function SubchecklistSection({
               <TaskRow
                 key={item.id}
                 item={item}
+                checklistId={checklistId}
                 canComplete={canComplete}
                 canDelete={canDelete}
                 onComplete={onComplete}
@@ -569,12 +772,10 @@ function ChecklistDetailView({ checklistId }: { checklistId: number }) {
 
   const isAssigned = checklist.assignments.some((a) => a.userId === user?.id);
   const canComplete = isAssigned || canManage;
-  // Group leads on this checklist can also delete manual tasks
   const canDelete = canManage || (!!user?.role.canApproveRequests && isAssigned);
 
   const completedCount = checklist.items.filter((i) => i.isCompleted).length;
 
-  // Items not in any subchecklist (top-level)
   const topLevelItems = checklist.items.filter((i) => i.subchecklistId === null);
 
   const assignees = checklist.assignments.map((a) => a.user);
@@ -620,6 +821,7 @@ function ChecklistDetailView({ checklistId }: { checklistId: number }) {
             <SubchecklistSection
               key={sub.id}
               sub={sub}
+              checklistId={checklistId}
               canComplete={canComplete}
               canDelete={canDelete}
               onComplete={setCompletingItem}
@@ -639,6 +841,7 @@ function ChecklistDetailView({ checklistId }: { checklistId: number }) {
             <TaskRow
               key={item.id}
               item={item}
+              checklistId={checklistId}
               canComplete={canComplete}
               canDelete={canDelete}
               onComplete={setCompletingItem}
@@ -800,7 +1003,7 @@ export function ChecklistPage() {
                       {GROUP_DISPLAY[cl.groupName]}
                     </span>
                     <span className="text-xs text-slate-500">
-                      Week of {new Date(cl.weekStart).toLocaleDateString()}
+                      Sabha: {formatSabhaDate(cl.sabhaDate, cl.weekStart)}
                     </span>
                     {cl.completedCount === cl.itemCount && cl.itemCount > 0 && (
                       <span className="badge-green text-xs">All done</span>

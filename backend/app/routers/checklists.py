@@ -9,8 +9,12 @@ Permission model:
   - Users: view checklists for their own group, complete items only on assigned checklists
 """
 
-from datetime import datetime, timezone
+import logging
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
+from zoneinfo import ZoneInfo
+
+log = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -21,14 +25,18 @@ from app.dependencies import get_current_user, get_db
 from app.models.checklist import (
     Checklist,
     ChecklistAssignment,
+    ChecklistAssignmentDefault,
     ChecklistItem,
     GroupName,
     Subchecklist,
     SubchecklistType,
+    sabha_date_for_week,
 )
 from app.models.user import User
 from app.schemas.checklist import (
     ChecklistAssignCreate,
+    ChecklistAssignmentDefaultCreate,
+    ChecklistAssignmentDefaultOut,
     ChecklistAssignmentOut,
     ChecklistItemComplete,
     ChecklistItemCreate,
@@ -40,16 +48,28 @@ from app.schemas.checklist import (
     SubchecklistOut,
 )
 from app.services.checklist_service import (
+    add_checklist_default,
     complete_checklist_item,
     get_or_create_weekly_checklists,
+    list_checklist_defaults,
 )
-from app.services.telegram_service import notify_checklist_return_proof
+from app.services.telegram_service import (
+    notify_checklist_item_status_changed,
+    notify_checklist_return_proof,
+)
 
 router = APIRouter(prefix="/checklists", tags=["checklists"])
 
 
 def _can_manage(user: User) -> bool:
     return user.role.can_manage_users or user.role.can_manage_inventory
+
+
+def _can_manage_defaults(user: User, group_name: str) -> bool:
+    """Admin/coordinator can manage defaults for any group. Group lead can manage their own group."""
+    if _can_manage(user):
+        return True
+    return user.role.can_approve_requests and user.group_name == group_name
 
 
 def _can_add_items(user: User) -> bool:
@@ -77,16 +97,106 @@ def _can_manage_tasks_on(user: User, checklist: Checklist) -> bool:
     return False
 
 
+def _assert_non_manager_can_act_on(user: User, checklist: Checklist) -> None:
+    """
+    Raise 403 if a non-manager user cannot act on items in this checklist.
+    Rules: must be assigned AND belong to the same group as the checklist.
+    Call only after confirming the user is not a manager.
+    """
+    if not _is_assigned(checklist, user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You must be assigned to this checklist to update tasks")
+    if user.group_name != checklist.group_name:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only update tasks on checklists for your own group")
+
+
+@router.get("/defaults", response_model=List[ChecklistAssignmentDefaultOut])
+async def list_defaults(
+    group_name: str = Query(..., description="Group name to list recurring defaults for"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> List[ChecklistAssignmentDefault]:
+    """List active recurring default assignees for a group."""
+    if group_name not in GroupName.ALL:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid group_name. Must be one of: {GroupName.ALL}")
+    if not _can_manage_defaults(current_user, group_name):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to view defaults for this group")
+    return await list_checklist_defaults(db, group_name)
+
+
+@router.post("/defaults", response_model=ChecklistAssignmentDefaultOut, status_code=status.HTTP_201_CREATED)
+async def add_default(
+    body: ChecklistAssignmentDefaultCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChecklistAssignmentDefault:
+    """
+    Add a recurring default assignee to a group. Applies to newly-created weekly checklists only.
+    Does not retroactively assign to the current week.
+    """
+    if body.group_name not in GroupName.ALL:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid group_name. Must be one of: {GroupName.ALL}")
+    if not _can_manage_defaults(current_user, body.group_name):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to manage defaults for this group")
+
+    target_user = (await db.execute(
+        select(User).where(User.id == body.user_id, User.is_active == True)
+    )).scalar_one_or_none()
+    if not target_user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+
+    if not _can_manage(current_user) and target_user.group_name != body.group_name:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "You can only add users from the same group as this default",
+        )
+
+    from app.core.exceptions import TransactionConflictError
+    try:
+        default = await add_checklist_default(db, body.group_name, body.user_id, current_user.id)
+    except TransactionConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.detail)
+
+    await db.commit()
+    return default
+
+
+@router.delete("/defaults/{default_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_default(
+    default_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """Deactivate a recurring default assignee (soft delete). Does not affect this week's assignments."""
+    result = await db.execute(
+        select(ChecklistAssignmentDefault).where(ChecklistAssignmentDefault.id == default_id)
+    )
+    default = result.scalar_one_or_none()
+    if not default:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Default assignee not found")
+    if not _can_manage_defaults(current_user, default.group_name):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to manage defaults for this group")
+
+    default.is_active = False
+    await db.commit()
+
+
+_CHECKLIST_TZ = ZoneInfo("America/Chicago")
+
+
 @router.get("", response_model=List[ChecklistSummary])
 async def list_checklists(
     group_name: Optional[str] = Query(None),
     week_start: Optional[str] = Query(None, description="YYYY-MM-DD Monday date"),
+    include_archived: bool = Query(False, description="Include checklists past the 14-day post-Sabha window"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> List[ChecklistSummary]:
     """
-    List checklists. Admins/coordinators see all; others see only assigned ones.
-    If no week_start given, defaults to current week (auto-generating if needed).
+    List checklists. Admins/coordinators see all; others see only their group's.
+
+    By default hides checklists whose Sabha date was more than 14 days ago.
+    Pass include_archived=true to also return older checklists.
+    If week_start is provided the archival filter is skipped (explicit week lookup).
     """
     if not week_start:
         # Ensure current week checklists exist
@@ -106,14 +216,20 @@ async def list_checklists(
         query = query.where(Checklist.group_name == group_name)
 
     if week_start:
-        from datetime import date
         try:
             ws = date.fromisoformat(week_start)
             query = query.where(Checklist.week_start == ws)
         except ValueError:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid week_start date format")
 
-    rows = (await db.execute(query)).scalars().all()
+    rows = list((await db.execute(query)).scalars().all())
+
+    # Archival filter: hide checklists whose Sabha date was more than 14 days ago,
+    # unless include_archived is requested or the caller pinned a specific week.
+    if not include_archived and not week_start:
+        today = datetime.now(_CHECKLIST_TZ).date()
+        cutoff = today - timedelta(days=14)
+        rows = [cl for cl in rows if sabha_date_for_week(cl.week_start) >= cutoff]
 
     result = []
     for cl in rows:
@@ -296,8 +412,8 @@ async def complete_item(
     if not checklist:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist not found")
 
-    if not _can_manage(current_user) and not _is_assigned(checklist, current_user.id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You must be assigned to this checklist to complete tasks")
+    if not _can_manage(current_user):
+        _assert_non_manager_can_act_on(current_user, checklist)
 
     item_result = await db.execute(
         select(ChecklistItem).where(
@@ -322,7 +438,7 @@ async def complete_item(
 
     request_proof = task.is_auto_generated and task.auto_type in ("ITEM_RETURN", "BIN_RETURN")
 
-    task = await complete_checklist_item(
+    task, transition_occurred = await complete_checklist_item(
         db,
         item_id=item_id,
         user_id=current_user.id,
@@ -333,8 +449,68 @@ async def complete_item(
     await db.commit()
     await db.refresh(task)
 
-    if request_proof:
+    if transition_occurred and request_proof:
         await notify_checklist_return_proof(task, current_user)
+    elif transition_occurred:
+        try:
+            await notify_checklist_item_status_changed(task, checklist, current_user, "completed")
+        except Exception:
+            log.exception("notify_checklist_item_status_changed failed for item_id=%s", task.id)
+
+    return task
+
+
+@router.patch("/{checklist_id}/items/{item_id}/incomplete", response_model=ChecklistItemOut)
+async def incomplete_item(
+    checklist_id: int,
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChecklistItem:
+    """Mark a completed checklist item as incomplete (undo completion)."""
+    cl_result = await db.execute(
+        select(Checklist)
+        .where(Checklist.id == checklist_id)
+        .options(selectinload(Checklist.assignments))
+    )
+    checklist = cl_result.scalar_one_or_none()
+    if not checklist:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist not found")
+
+    if not _can_manage(current_user):
+        _assert_non_manager_can_act_on(current_user, checklist)
+
+    item_result = await db.execute(
+        select(ChecklistItem).where(
+            ChecklistItem.id == item_id,
+            ChecklistItem.checklist_id == checklist_id,
+        ).with_for_update()
+    )
+    task = item_result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist item not found")
+
+    if task.is_auto_generated and task.auto_type in ("ITEM_RETURN", "BIN_RETURN"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Return tasks can only be managed through the checkout return flow.",
+        )
+
+    transition_occurred = task.is_completed
+    if transition_occurred:
+        task.is_completed = False
+        task.completed_at = None
+        task.completed_by_user_id = None
+        task.completion_notes = None
+
+    await db.commit()
+    await db.refresh(task)
+
+    if transition_occurred:
+        try:
+            await notify_checklist_item_status_changed(task, checklist, current_user, "incomplete")
+        except Exception:
+            log.exception("notify_checklist_item_status_changed failed for item_id=%s", task.id)
 
     return task
 
@@ -534,34 +710,55 @@ async def backfill_active_transactions(
     if not _can_manage(current_user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin or coordinator required")
 
+    from app.models.bin_transaction import BinTransaction, BinTransactionStatus
     from app.models.transaction import Transaction, TransactionStatus
-    from app.services.checklist_service import add_return_task_for_transaction
-
-    txn_result = await db.execute(
-        select(Transaction)
-        .where(Transaction.status.in_([TransactionStatus.CHECKED_OUT, TransactionStatus.OVERDUE]))
-        .options(selectinload(Transaction.user))
+    from app.services.checklist_service import (
+        add_return_task_for_bin_transaction,
+        add_return_task_for_transaction,
     )
-    active_txns = txn_result.scalars().all()
 
     created = 0
     skipped = 0
-    for txn in active_txns:
+
+    # Path A: standalone item checkouts — exclude child rows from bin checkouts.
+    # Rows with bin_transaction_id set are child transactions created by checkout_bin()
+    # and share the parent BinTransaction's purpose; the BIN_RETURN task is created
+    # via Path B, so processing them here would produce spurious ITEM_RETURN tasks.
+    txn_result = await db.execute(
+        select(Transaction)
+        .where(
+            Transaction.status.in_([TransactionStatus.CHECKED_OUT, TransactionStatus.OVERDUE]),
+            Transaction.bin_transaction_id.is_(None),
+        )
+        .options(selectinload(Transaction.user))
+    )
+    for txn in txn_result.scalars().all():
         borrower = txn.user
         if not borrower or not borrower.group_name:
             skipped += 1
             continue
-        existing = await db.execute(
-            select(ChecklistItem).where(
-                ChecklistItem.linked_transaction_id == txn.id,
-                ChecklistItem.is_auto_generated == True,
-            )
-        )
-        if existing.scalar_one_or_none():
+        _task, created_new = await add_return_task_for_transaction(db, txn, borrower)
+        if created_new:
+            created += 1
+        else:
+            skipped += 1
+
+    # Path B: bin transactions — creates one BIN_RETURN task per active bin checkout.
+    bin_txn_result = await db.execute(
+        select(BinTransaction)
+        .where(BinTransaction.status.in_([BinTransactionStatus.CHECKED_OUT, BinTransactionStatus.OVERDUE]))
+        .options(selectinload(BinTransaction.user))
+    )
+    for bin_txn in bin_txn_result.scalars().all():
+        borrower = bin_txn.user
+        if not borrower or not borrower.group_name:
             skipped += 1
             continue
-        await add_return_task_for_transaction(db, txn, borrower)
-        created += 1
+        _task, created_new = await add_return_task_for_bin_transaction(db, bin_txn, borrower)
+        if created_new:
+            created += 1
+        else:
+            skipped += 1
 
     await db.commit()
     return {"created": created, "skipped": skipped}

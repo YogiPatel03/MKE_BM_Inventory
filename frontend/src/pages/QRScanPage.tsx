@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { resolveQRToken } from "@/api/qr";
 import { useAuthStore } from "@/store/auth";
 import { checkoutBin, returnBin, listBinTransactions } from "@/api/binTransactions";
 import { submitRequest } from "@/api/requests";
+import type { CheckoutPurpose } from "@/types";
 
 type QRResult = { type: "item"; id: number } | { type: "bin"; id: number } | null;
 
@@ -18,6 +20,7 @@ type QRResult = { type: "item"; id: number } | { type: "bin"; id: number } | nul
 export function QRScanPage() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const canProcess = user?.role.canProcessAnyTransaction || user?.role.canManageUsers;
 
@@ -27,6 +30,7 @@ export function QRScanPage() {
   const [activeBinTxnId, setActiveBinTxnId] = useState<number | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionDone, setActionDone] = useState(false);
+  const [qrPurpose, setQrPurpose] = useState<CheckoutPurpose>("GENERAL");
 
   useEffect(() => {
     if (!token) {
@@ -65,7 +69,12 @@ export function QRScanPage() {
     setActionLoading(true);
     try {
       if (action === "checkout") {
-        await checkoutBin({ binId: resolved.id });
+        await checkoutBin({ binId: resolved.id, purpose: qrPurpose });
+        qc.invalidateQueries({ queryKey: ["checklists"] });
+        qc.invalidateQueries({ queryKey: ["checklist"] });
+        qc.invalidateQueries({ queryKey: ["activity"] });
+        qc.invalidateQueries({ queryKey: ["bin-transactions"] });
+        qc.invalidateQueries({ queryKey: ["items"] });
         setActionDone(true);
         setTimeout(() => navigate("/transactions", { replace: true }), 1500);
       } else if (action === "return" && activeBinTxnId) {
@@ -138,13 +147,39 @@ export function QRScanPage() {
         ) : canProcess ? (
           <div className="space-y-3">
             {binStatus === "available" && (
-              <button
-                onClick={() => handleBinAction("checkout")}
-                disabled={actionLoading}
-                className="btn-primary w-full justify-center"
-              >
-                {actionLoading ? "Processing…" : "Check out bin"}
-              </button>
+              <>
+                <div className="text-left">
+                  <p className="text-xs font-medium text-slate-600 mb-1.5">Checkout purpose</p>
+                  <div className="flex gap-2">
+                    {(["GENERAL", "SABHA"] as const).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setQrPurpose(p)}
+                        className={`flex-1 rounded-lg border px-2.5 py-2 text-xs font-medium text-left transition-colors ${
+                          qrPurpose === p
+                            ? "border-brand-600 bg-brand-50 text-brand-700"
+                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span className="block">{p === "GENERAL" ? "General use" : "Sabha"}</span>
+                        <span className="block font-normal mt-0.5 text-slate-400">
+                          {p === "GENERAL"
+                            ? "Does not appear on the Sabha checklist."
+                            : "Adds this bin to the Sabha return checklist."}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleBinAction("checkout")}
+                  disabled={actionLoading}
+                  className="btn-primary w-full justify-center"
+                >
+                  {actionLoading ? "Processing…" : "Check out bin"}
+                </button>
+              </>
             )}
             {binStatus === "checked_out" && (
               <button

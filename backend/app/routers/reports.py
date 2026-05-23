@@ -1,23 +1,25 @@
 """
-Reports router — inventory status, expense/usage summaries, and held-value.
+Reports router — inventory status, expense/usage summaries, held-value, and checklist history.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user as get_current_active_user, get_db
 from app.core.permissions import require_manage_inventory
 from app.models.cabinet import Cabinet
+from app.models.checklist import GroupName
 from app.models.item import Item
 from app.models.purchase_record import PurchaseRecord
 from app.models.room import Room
 from app.models.transaction import Transaction, TransactionStatus
 from app.models.usage_event import UsageEvent
 from app.models.user import User
+from app.schemas.checklist import ChecklistAssignmentOut, ChecklistHistorySummary
 from app.schemas.report import (
     ExpenseReport,
     HeldValueByCabinet,
@@ -30,6 +32,7 @@ from app.schemas.report import (
     LowStockItem,
     OutOfStockItem,
 )
+from app.services.checklist_service import list_checklists_historical
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -304,3 +307,49 @@ async def held_value_report(
         by_cabinet=sorted(by_cabinet.values(), key=lambda c: c.cabinet_name),
         items=items_out,
     )
+
+
+@router.get("/checklists", response_model=List[ChecklistHistorySummary])
+async def checklist_history_report(
+    group_name: Optional[str] = Query(None, description="Filter by group name"),
+    start_date: Optional[date] = Query(None, description="Filter: sabha_date >= start_date"),
+    end_date: Optional[date] = Query(None, description="Filter: sabha_date <= end_date"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> List[ChecklistHistorySummary]:
+    """
+    Historical checklist report — admin/coordinator only.
+
+    Returns all checklists including ones hidden from the normal checklist list,
+    optionally filtered by group_name and sabha_date range.
+    """
+    require_manage_inventory(current_user)
+
+    if group_name and group_name not in GroupName.ALL:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Invalid group_name. Must be one of: {GroupName.ALL}",
+        )
+
+    checklists = await list_checklists_historical(
+        db,
+        group_name=group_name,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    return [
+        ChecklistHistorySummary(
+            id=cl.id,
+            group_name=cl.group_name,
+            week_start=cl.week_start,
+            is_active=cl.is_active,
+            created_at=cl.created_at,
+            updated_at=cl.updated_at,
+            item_count=len(cl.items),
+            completed_count=sum(1 for i in cl.items if i.is_completed),
+            assignee_count=len(cl.assignments),
+            assignments=[ChecklistAssignmentOut.model_validate(a) for a in cl.assignments],
+        )
+        for cl in checklists
+    ]

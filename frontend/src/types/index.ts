@@ -135,6 +135,10 @@ export interface TransactionDetail extends Transaction {
   processedBy: User | null;
 }
 
+// ─── Checkout purpose ─────────────────────────────────────────────────────────
+
+export type CheckoutPurpose = "GENERAL" | "SABHA";
+
 // ─── API ──────────────────────────────────────────────────────────────────────
 
 export interface CheckoutRequest {
@@ -143,6 +147,7 @@ export interface CheckoutRequest {
   quantity: number;
   dueAt?: string;
   notes?: string;
+  purpose?: CheckoutPurpose;
 }
 
 export interface ReturnRequest {
@@ -367,6 +372,7 @@ export interface Checklist {
   id: number;
   groupName: GroupName;
   weekStart: string;
+  sabhaDate?: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -379,12 +385,40 @@ export interface ChecklistSummary {
   id: number;
   groupName: GroupName;
   weekStart: string;
+  sabhaDate?: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
   itemCount: number;
   completedCount: number;
   assigneeCount: number;
+}
+
+export interface ChecklistAssignmentDefault {
+  id: number;
+  groupName: string;
+  userId: number;
+  assignedById: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  user: ChecklistAssignmentUser;
+  assignedBy: ChecklistAssignmentUser;
+}
+
+export interface ChecklistHistorySummary {
+  id: number;
+  groupName: string;
+  weekStart: string;
+  sabhaDate: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  itemCount: number;
+  completedCount: number;
+  assigneeCount: number;
+  completionPercentage: number | null;
+  assignments: ChecklistAssignment[];
 }
 
 // ─── Reports ──────────────────────────────────────────────────────────────────

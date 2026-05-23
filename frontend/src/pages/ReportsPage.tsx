@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, BarChart2, DollarSign, Package, TrendingDown } from "lucide-react";
-import { getInventoryStatus, getExpenseReport, getHeldValueReport } from "@/api/reports";
+import { AlertTriangle, BarChart2, DollarSign, ListChecks, Package, TrendingDown } from "lucide-react";
+import { getInventoryStatus, getExpenseReport, getHeldValueReport, getChecklistHistoryReport } from "@/api/reports";
 import { listItems } from "@/api/items";
 import { useAuthStore } from "@/store/auth";
 import { Navigate } from "react-router-dom";
+import { GROUP_DISPLAY, GROUP_NAMES } from "@/types";
+import type { GroupName } from "@/types";
+import { formatSabhaDate } from "@/utils/checklistDateHelpers";
 
 function toISODate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -137,6 +140,155 @@ function HeldValueTab() {
   );
 }
 
+// ── Checklist History Tab ─────────────────────────────────────────────────────
+
+function ChecklistHistoryTab() {
+  const [groupName, setGroupName] = useState<string>("");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+
+  const { data: results = [], isLoading, isError } = useQuery({
+    queryKey: ["report-checklist-history", groupName, startDate, endDate],
+    queryFn: () =>
+      getChecklistHistoryReport({
+        groupName: groupName || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+      }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500">
+        Older checklists are hidden from the main Checklist page but can be searched here.
+      </p>
+
+      {/* Filters */}
+      <div className="card p-4 space-y-3">
+        <h2 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+          <ListChecks className="h-4 w-4" />
+          Filters
+        </h2>
+        <div className="flex gap-3 flex-wrap">
+          <div>
+            <label className="label">Group</label>
+            <select
+              className="input"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+            >
+              <option value="">All groups</option>
+              {GROUP_NAMES.map((g) => (
+                <option key={g} value={g}>
+                  {GROUP_DISPLAY[g]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Sabha date from</label>
+            <input
+              type="date"
+              className="input"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Sabha date to</label>
+            <input
+              type="date"
+              className="input"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Results */}
+      <div className="card p-4">
+        {isLoading ? (
+          <div className="flex justify-center py-8">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
+          </div>
+        ) : isError ? (
+          <p className="text-sm text-red-500">Failed to load checklist history. Please try again.</p>
+        ) : results.length === 0 ? (
+          <p className="text-sm text-slate-400">No checklists found for the selected filters.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100">
+                  <th className="text-left pb-2 font-medium text-slate-600">Group</th>
+                  <th className="text-left pb-2 font-medium text-slate-600">Sabha Date</th>
+                  <th className="text-left pb-2 font-medium text-slate-600 hidden md:table-cell">Assignees</th>
+                  <th className="text-right pb-2 font-medium text-slate-600">Tasks</th>
+                  <th className="text-right pb-2 font-medium text-slate-600">Done</th>
+                  <th className="text-right pb-2 font-medium text-slate-600">%</th>
+                  <th className="text-right pb-2 font-medium text-slate-600 hidden sm:table-cell">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {results.map((cl) => {
+                  const pct = cl.completionPercentage;
+                  const assigneeNames = cl.assignments
+                    .map((a) => a.user.fullName)
+                    .join(", ");
+                  const displayGroup =
+                    GROUP_DISPLAY[cl.groupName as GroupName] ?? cl.groupName;
+                  return (
+                    <tr key={cl.id}>
+                      <td className="py-2 text-slate-700 font-medium">{displayGroup}</td>
+                      <td className="py-2 text-slate-600 whitespace-nowrap">
+                        {formatSabhaDate(cl.sabhaDate, cl.weekStart)}
+                      </td>
+                      <td className="py-2 text-slate-500 hidden md:table-cell">
+                        {assigneeNames || <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="py-2 text-right text-slate-600">{cl.itemCount}</td>
+                      <td className="py-2 text-right text-slate-600">{cl.completedCount}</td>
+                      <td className="py-2 text-right font-medium">
+                        {pct === null ? (
+                          <span className="text-slate-300">—</span>
+                        ) : (
+                          <span
+                            className={
+                              pct === 100
+                                ? "text-green-600"
+                                : pct >= 50
+                                  ? "text-amber-600"
+                                  : "text-red-500"
+                            }
+                          >
+                            {pct}%
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 text-right hidden sm:table-cell">
+                        <span
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                            cl.isActive
+                              ? "bg-green-50 text-green-700"
+                              : "bg-slate-100 text-slate-500"
+                          }`}
+                        >
+                          {cl.isActive ? "Active" : "Archived"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Reports Page ─────────────────────────────────────────────────────────
 
 export function ReportsPage() {
@@ -147,7 +299,7 @@ export function ReportsPage() {
   const [preset, setPreset] = useState<"month" | "ytd" | "custom">("month");
   const [startDate, setStartDate] = useState(thisMonthStart());
   const [endDate, setEndDate] = useState(today);
-  const [activeTab, setActiveTab] = useState<"status" | "purchases" | "usage" | "held-value">("status");
+  const [activeTab, setActiveTab] = useState<"status" | "purchases" | "usage" | "held-value" | "checklist-history">("status");
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
 
   const effectiveStart = preset === "month" ? thisMonthStart() : preset === "ytd" ? ytdStart() : startDate;
@@ -186,7 +338,7 @@ export function ReportsPage() {
 
       {/* Top-level tabs */}
       <div className="flex gap-2 flex-wrap">
-        {(["status", "purchases", "usage", "held-value"] as const).map((tab) => (
+        {(["status", "purchases", "usage", "held-value", "checklist-history"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -200,6 +352,7 @@ export function ReportsPage() {
             {tab === "purchases" && "Purchases"}
             {tab === "usage" && "Usage"}
             {tab === "held-value" && "Held Value"}
+            {tab === "checklist-history" && "Checklist History"}
           </button>
         ))}
       </div>
@@ -412,6 +565,9 @@ export function ReportsPage() {
 
       {/* ── Held Value Tab ── */}
       {activeTab === "held-value" && <HeldValueTab />}
+
+      {/* ── Checklist History Tab ── */}
+      {activeTab === "checklist-history" && <ChecklistHistoryTab />}
     </div>
   );
 }

@@ -229,7 +229,10 @@ def can_complete_on(user: "User", checklist: Checklist) -> bool:
     """True if user may mark tasks complete on this checklist. Requires checklist.assignments loaded."""
     if user.role.can_manage_users or user.role.can_manage_inventory:
         return True
-    if any(a.user_id == user.id for a in checklist.assignments):
+    if (
+        any(a.user_id == user.id for a in checklist.assignments)
+        and user.group_name == checklist.group_name
+    ):
         return True
     return False
 

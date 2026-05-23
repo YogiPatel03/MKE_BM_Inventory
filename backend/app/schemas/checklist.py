@@ -1,10 +1,13 @@
 from datetime import date, datetime
+
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
+
+from app.models.checklist import sabha_date_for_week
 
 
-# ── Assignment ────────────────────────────────────────────────────────────────
+# ── Shared nested user shape ───────────────────────────────────────────────────
 
 class AssignmentUserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -13,6 +16,28 @@ class AssignmentUserOut(BaseModel):
     username: str
     group_name: Optional[str] = None
 
+
+# ── Assignment Defaults ───────────────────────────────────────────────────────
+
+class ChecklistAssignmentDefaultOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    group_name: str
+    user_id: int
+    assigned_by_id: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    user: AssignmentUserOut
+    assigned_by: AssignmentUserOut
+
+
+class ChecklistAssignmentDefaultCreate(BaseModel):
+    group_name: str
+    user_id: int
+
+
+# ── Per-week Assignment ───────────────────────────────────────────────────────
 
 class ChecklistAssignmentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -106,6 +131,11 @@ class ChecklistOut(BaseModel):
     assignments: List[ChecklistAssignmentOut] = []
     subchecklists: List[SubchecklistOut] = []
 
+    @computed_field
+    @property
+    def sabha_date(self) -> date:
+        return sabha_date_for_week(self.week_start)
+
 
 class ChecklistSummary(BaseModel):
     """Lighter version for list views (no items)."""
@@ -119,6 +149,38 @@ class ChecklistSummary(BaseModel):
     item_count: int = 0
     completed_count: int = 0
     assignee_count: int = 0
+
+    @computed_field
+    @property
+    def sabha_date(self) -> date:
+        return sabha_date_for_week(self.week_start)
+
+
+class ChecklistHistorySummary(BaseModel):
+    """Full summary for reports/historical queries — includes assignee list and completion %."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    group_name: str
+    week_start: date
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    item_count: int = 0
+    completed_count: int = 0
+    assignee_count: int = 0
+    assignments: List[ChecklistAssignmentOut] = []
+
+    @computed_field
+    @property
+    def sabha_date(self) -> date:
+        return sabha_date_for_week(self.week_start)
+
+    @computed_field
+    @property
+    def completion_percentage(self) -> Optional[float]:
+        if self.item_count == 0:
+            return None
+        return round(self.completed_count / self.item_count * 100, 1)
 
 
 # Forward reference resolution

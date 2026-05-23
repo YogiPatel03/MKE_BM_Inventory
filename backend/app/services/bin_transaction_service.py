@@ -26,7 +26,7 @@ from app.models.activity_log import ActivityType
 from app.models.bin import Bin
 from app.models.bin_transaction import BinTransaction, BinTransactionStatus
 from app.models.item import Item
-from app.models.transaction import Transaction, TransactionStatus
+from app.models.transaction import CheckoutPurpose, Transaction, TransactionStatus
 from app.models.user import User
 from app.services.activity_service import log_activity
 
@@ -41,6 +41,7 @@ async def checkout_bin(
     processed_by_user_id: int,
     due_at: Optional[datetime],
     notes: Optional[str],
+    purpose: str = CheckoutPurpose.GENERAL,
 ) -> tuple[BinTransaction, list[int]]:
     """
     Check out a bin. Returns (BinTransaction, excluded_item_ids) where
@@ -106,6 +107,7 @@ async def checkout_bin(
         due_at=due_at,
         notes=notes,
         included_item_ids=included_item_ids,
+        purpose=purpose,
     )
     db.add(bin_txn)
     await db.flush()  # get bin_txn.id
@@ -129,6 +131,7 @@ async def checkout_bin(
             due_at=due_at,
             notes=f"[Bin checkout #{bin_txn.id}] {notes or ''}".strip(),
             bin_transaction_id=bin_txn.id,
+            purpose=purpose,
         )
         db.add(txn)
 

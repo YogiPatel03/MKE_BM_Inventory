@@ -50,7 +50,7 @@ export interface ExpenseReport {
   byUsage: ItemUsageSummary[];
 }
 
-import type { HeldValueReport } from "@/types";
+import type { ChecklistHistorySummary, HeldValueReport } from "@/types";
 
 export async function getInventoryStatus(): Promise<InventoryStatusReport> {
   const { data } = await apiClient.get("/reports/inventory-status");
@@ -70,5 +70,20 @@ export async function getExpenseReport(
 
 export async function getHeldValueReport(): Promise<HeldValueReport> {
   const { data } = await apiClient.get("/reports/held-value");
+  return data;
+}
+
+export async function getChecklistHistoryReport(params?: {
+  groupName?: string;
+  startDate?: string;
+  endDate?: string;
+}): Promise<ChecklistHistorySummary[]> {
+  const { data } = await apiClient.get("/reports/checklists", {
+    params: {
+      ...(params?.groupName && { group_name: params.groupName }),
+      ...(params?.startDate && { start_date: params.startDate }),
+      ...(params?.endDate && { end_date: params.endDate }),
+    },
+  });
   return data;
 }

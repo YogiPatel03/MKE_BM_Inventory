@@ -93,6 +93,7 @@ async def checkout(
         due_at=body.due_at,
         notes=body.notes,
         bypass_requires_request=bypass,
+        purpose=body.purpose,
     )
     # Auto-create return task on the borrower's group checklist
     from sqlalchemy import select as sa_select

@@ -3,11 +3,14 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from app.models.transaction import CheckoutPurpose
+
 
 class BinTransactionCreate(BaseModel):
     bin_id: int
     notes: Optional[str] = None
     due_at: Optional[datetime] = None
+    purpose: CheckoutPurpose = CheckoutPurpose.GENERAL
 
 
 class BinTransactionReturn(BaseModel):
@@ -22,6 +25,7 @@ class BinTransactionOut(BaseModel):
     user_id: int
     processed_by_user_id: Optional[int] = None
     status: str
+    purpose: CheckoutPurpose = CheckoutPurpose.GENERAL
     checked_out_at: datetime
     due_at: Optional[datetime] = None
     returned_at: Optional[datetime] = None

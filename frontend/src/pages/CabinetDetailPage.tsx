@@ -6,7 +6,7 @@ import { getCabinet, listBins, listItems, updateCabinet } from "@/api/cabinets";
 import { checkoutBin, returnBin, listBinTransactions } from "@/api/binTransactions";
 import { submitRequest } from "@/api/requests";
 import { useAuthStore } from "@/store/auth";
-import type { Bin, BinTransaction, Cabinet, Item } from "@/types";
+import type { Bin, BinTransaction, Cabinet, CheckoutPurpose, Item } from "@/types";
 import { CheckoutModal } from "@/components/transactions/CheckoutModal";
 import { BinModal } from "@/components/modals/BinModal";
 import { BinQRModal } from "@/components/modals/BinQRModal";
@@ -208,18 +208,22 @@ function BinSection({
   const [moveOpen, setMoveOpen] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [checkoutNotes, setCheckoutNotes] = useState("");
+  const [checkoutPurpose, setCheckoutPurpose] = useState<CheckoutPurpose>("GENERAL");
   const [returnNotes, setReturnNotes] = useState("");
   const [showCheckoutForm, setShowCheckoutForm] = useState(false);
   const [showReturnForm, setShowReturnForm] = useState(false);
 
   const checkoutMut = useMutation({
-    mutationFn: () => checkoutBin({ binId: bin.id, notes: checkoutNotes || undefined }),
+    mutationFn: () => checkoutBin({ binId: bin.id, notes: checkoutNotes || undefined, purpose: checkoutPurpose }),
     onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["items", "cabinet", cabinetId] });
       qc.invalidateQueries({ queryKey: ["bin-transactions"] });
+      qc.invalidateQueries({ queryKey: ["checklists"] });
+      qc.invalidateQueries({ queryKey: ["checklist"] });
       onBinTxnChange();
       setShowCheckoutForm(false);
       setCheckoutNotes("");
+      setCheckoutPurpose("GENERAL");
       if (result.excludedItemIds && result.excludedItemIds.length > 0) {
         toast.success(
           `Bin checked out (partial: ${result.excludedItemIds.length} item(s) already individually checked out were excluded)`
@@ -279,7 +283,7 @@ function BinSection({
           </button>
           {canProcess && !isCheckedOut && hasItems && !showCheckoutForm && (
             <button
-              onClick={() => setShowCheckoutForm(true)}
+              onClick={() => { setShowCheckoutForm(true); setCheckoutPurpose("GENERAL"); setCheckoutNotes(""); }}
               className="btn-primary text-xs py-1 px-3"
             >
               <Package className="h-3.5 w-3.5" />
@@ -318,6 +322,30 @@ function BinSection({
             value={checkoutNotes}
             onChange={(e) => setCheckoutNotes(e.target.value)}
           />
+          <div>
+            <p className="text-xs font-medium text-brand-800 mb-1.5">Checkout purpose</p>
+            <div className="flex gap-2">
+              {(["GENERAL", "SABHA"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setCheckoutPurpose(p)}
+                  className={`flex-1 rounded-lg border px-2.5 py-2 text-xs font-medium text-left transition-colors ${
+                    checkoutPurpose === p
+                      ? "border-brand-600 bg-white text-brand-700"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                  }`}
+                >
+                  <span className="block">{p === "GENERAL" ? "General use" : "Sabha"}</span>
+                  <span className="block font-normal mt-0.5 text-slate-400">
+                    {p === "GENERAL"
+                      ? "Does not appear on the Sabha checklist."
+                      : "Adds this bin to the Sabha return checklist."}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
           {checkoutMut.isError && (
             <p className="text-xs text-red-600">{(checkoutMut.error as any)?.response?.data?.detail ?? "Failed"}</p>
           )}
@@ -325,7 +353,7 @@ function BinSection({
             <button onClick={() => { checkoutMut.mutate(); }} disabled={checkoutMut.isPending} className="btn-primary text-xs py-1 px-3">
               {checkoutMut.isPending ? "Checking out…" : "Confirm checkout"}
             </button>
-            <button onClick={() => setShowCheckoutForm(false)} className="btn-secondary text-xs py-1 px-3">
+            <button onClick={() => { setShowCheckoutForm(false); setCheckoutNotes(""); setCheckoutPurpose("GENERAL"); }} className="btn-secondary text-xs py-1 px-3">
               Cancel
             </button>
           </div>

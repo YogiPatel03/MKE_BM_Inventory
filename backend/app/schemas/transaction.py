@@ -3,6 +3,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from app.models.transaction import CheckoutPurpose
 from app.schemas.item import ItemOut
 from app.schemas.user import UserOut
 
@@ -13,6 +14,7 @@ class CheckoutRequest(BaseModel):
     quantity: float = 1.0
     due_at: Optional[datetime] = None
     notes: Optional[str] = None
+    purpose: CheckoutPurpose = CheckoutPurpose.GENERAL
 
     @field_validator("quantity")
     @classmethod
@@ -38,6 +40,7 @@ class TransactionOut(BaseModel):
     checked_out_at: datetime
     due_at: Optional[datetime]
     returned_at: Optional[datetime]
+    purpose: CheckoutPurpose
     notes: Optional[str]
     photo_requested_via_telegram: bool
     created_at: datetime

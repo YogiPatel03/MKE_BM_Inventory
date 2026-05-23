@@ -34,6 +34,8 @@ function test(name, fn) {
 }
 
 const itemPayloads = await importTs("src/api/itemPayloads.ts");
+const checklistDateHelpers = await importTs("src/utils/checklistDateHelpers.ts");
+const { formatSabhaDate, parseLocalDate } = checklistDateHelpers;
 const typesSource = await read("src/types/index.ts");
 const itemModalSource = await read("src/components/modals/ItemModal.tsx");
 const itemDetailSource = await read("src/pages/ItemDetailPage.tsx");
@@ -41,6 +43,72 @@ const cabinetDetailSource = await read("src/pages/CabinetDetailPage.tsx");
 const inventoryListSource = await read("src/pages/InventoryListPage.tsx");
 const inventorySearchSource = await read("src/pages/InventoryPage.tsx");
 const clientSource = await read("src/api/client.ts");
+
+// ── formatSabhaDate / parseLocalDate ─────────────────────────────────────────
+
+test("formatSabhaDate: valid sabhaDate returns formatted date", () => {
+  const result = formatSabhaDate("2026-05-10");
+  assert.equal(result, "May 10, 2026");
+});
+
+test("formatSabhaDate: missing sabhaDate falls back to weekStart", () => {
+  const result = formatSabhaDate(null, "2026-05-03");
+  assert.equal(result, "Week of May 3, 2026");
+});
+
+test("formatSabhaDate: undefined sabhaDate falls back to weekStart", () => {
+  const result = formatSabhaDate(undefined, "2026-05-03");
+  assert.equal(result, "Week of May 3, 2026");
+});
+
+test("formatSabhaDate: malformed sabhaDate falls back to weekStart", () => {
+  const result = formatSabhaDate("abc-def-ghi", "2026-05-03");
+  assert.equal(result, "Week of May 3, 2026");
+});
+
+test("formatSabhaDate: impossible date falls back to weekStart", () => {
+  const result = formatSabhaDate("2026-99-99", "2026-05-03");
+  assert.equal(result, "Week of May 3, 2026");
+});
+
+test("formatSabhaDate: both missing returns unavailable string", () => {
+  const result = formatSabhaDate(null, null);
+  assert.equal(result, "Sabha date unavailable");
+});
+
+test("formatSabhaDate: both undefined returns unavailable string", () => {
+  const result = formatSabhaDate(undefined, undefined);
+  assert.equal(result, "Sabha date unavailable");
+});
+
+test("formatSabhaDate: malformed sabhaDate and missing weekStart returns unavailable string", () => {
+  const result = formatSabhaDate("not-a-date");
+  assert.equal(result, "Sabha date unavailable");
+});
+
+test("parseLocalDate: returns null for wrong part count", () => {
+  assert.equal(parseLocalDate("2026-05"), null);
+  assert.equal(parseLocalDate("2026"), null);
+});
+
+test("parseLocalDate: returns null for non-numeric parts", () => {
+  assert.equal(parseLocalDate("abc-def-ghi"), null);
+});
+
+test("parseLocalDate: returns null for overflowed date", () => {
+  assert.equal(parseLocalDate("2026-13-01"), null);
+  assert.equal(parseLocalDate("2026-01-32"), null);
+});
+
+test("parseLocalDate: valid date returns Date with correct local components", () => {
+  const d = parseLocalDate("2026-05-10");
+  assert.notEqual(d, null);
+  assert.equal(d.getFullYear(), 2026);
+  assert.equal(d.getMonth(), 4); // 0-indexed
+  assert.equal(d.getDate(), 10);
+});
+
+// ── Item type tests ───────────────────────────────────────────────────────────
 
 test("Item type includes requiresRequest", () => {
   assert.match(typesSource, /requiresRequest: boolean;/);

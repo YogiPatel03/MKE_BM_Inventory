@@ -1,5 +1,5 @@
 import { apiClient } from "./client";
-import type { Checklist, ChecklistItem, ChecklistSummary, ChecklistAssignment, Subchecklist } from "@/types";
+import type { Checklist, ChecklistAssignmentDefault, ChecklistItem, ChecklistSummary, ChecklistAssignment, Subchecklist } from "@/types";
 
 export async function listChecklists(params?: {
   groupName?: string;
@@ -104,6 +104,38 @@ export async function unassignUser(
   userId: number
 ): Promise<void> {
   await apiClient.delete(`/checklists/${checklistId}/assign/${userId}`);
+}
+
+export async function incompleteChecklistItem(
+  checklistId: number,
+  itemId: number
+): Promise<ChecklistItem> {
+  const { data } = await apiClient.patch<ChecklistItem>(
+    `/checklists/${checklistId}/items/${itemId}/incomplete`
+  );
+  return data;
+}
+
+export async function listChecklistDefaults(groupName: string): Promise<ChecklistAssignmentDefault[]> {
+  const { data } = await apiClient.get<ChecklistAssignmentDefault[]>("/checklists/defaults", {
+    params: { group_name: groupName },
+  });
+  return data;
+}
+
+export async function addChecklistDefault(
+  groupName: string,
+  userId: number
+): Promise<ChecklistAssignmentDefault> {
+  const { data } = await apiClient.post<ChecklistAssignmentDefault>("/checklists/defaults", {
+    group_name: groupName,
+    user_id: userId,
+  });
+  return data;
+}
+
+export async function removeChecklistDefault(defaultId: number): Promise<void> {
+  await apiClient.delete(`/checklists/defaults/${defaultId}`);
 }
 
 export async function backfillActiveTransactions(): Promise<{ created: number; skipped: number }> {

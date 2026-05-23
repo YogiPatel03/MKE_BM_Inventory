@@ -1,15 +1,36 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
 if TYPE_CHECKING:
     from app.models.user import User
+
+
+def sabha_date_for_week(week_start: date) -> date:
+    """
+    Compute the Sabha date (Sunday) for a given prep-week start date.
+
+    The prep-week checklist is prepared during week_start…week_start+6 and
+    used at Sabha on the Sunday of that same week.
+
+    Special case: if week_start is itself a Sunday (weekday=6), Sabha is the
+    NEXT Sunday (+7 days) because week_start then represents the day *before*
+    the coming prep week.  This supports legacy or test data with Sunday
+    week_starts.
+
+    Examples:
+        week_start=2026-05-04 (Mon) → sabha=2026-05-10 (Sun)  [+6 days]
+        week_start=2026-05-03 (Sun) → sabha=2026-05-10 (Sun)  [+7 days]
+    """
+    # weekday(): Mon=0 … Sun=6
+    days = (6 - week_start.weekday()) % 7  # days until the coming Sunday
+    return week_start + timedelta(days=days if days != 0 else 7)
 
 
 class GroupName:
@@ -111,6 +132,22 @@ class ChecklistItem(Base):
     """A single task within a weekly checklist."""
 
     __tablename__ = "checklist_items"
+    __table_args__ = (
+        Index(
+            "uq_checklist_item_linked_txn",
+            "linked_transaction_id",
+            unique=True,
+            sqlite_where=text("linked_transaction_id IS NOT NULL"),
+            postgresql_where=text("linked_transaction_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_checklist_item_linked_bin_txn",
+            "linked_bin_transaction_id",
+            unique=True,
+            sqlite_where=text("linked_bin_transaction_id IS NOT NULL"),
+            postgresql_where=text("linked_bin_transaction_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     checklist_id: Mapped[int] = mapped_column(ForeignKey("checklists.id"), nullable=False, index=True)
@@ -181,3 +218,41 @@ class ChecklistAssignment(Base):
 
     def __repr__(self) -> str:
         return f"<ChecklistAssignment checklist={self.checklist_id} user={self.user_id}>"
+
+
+class ChecklistAssignmentDefault(Base):
+    """
+    Persistent default assignees for a group's recurring weekly checklist.
+    When a new weekly checklist is generated, these defaults are copied onto it
+    as ChecklistAssignment rows. Admins/coordinators may override per-week
+    assignments without touching these defaults.
+
+    Uniqueness: only one active default per (group_name, user_id). A partial
+    unique index (WHERE is_active) is created by migration 022 so that
+    deactivated rows are preserved for history but a user may be re-added.
+    """
+
+    __tablename__ = "checklist_assignment_defaults"
+    __table_args__ = (
+        # Non-unique lookup index; the partial unique constraint is in the migration.
+        Index("ix_checklist_defaults_group_user", "group_name", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_name: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    assigned_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
+    assigned_by: Mapped["User"] = relationship("User", foreign_keys=[assigned_by_id])
+
+    def __repr__(self) -> str:
+        return f"<ChecklistAssignmentDefault group={self.group_name} user={self.user_id} active={self.is_active}>"

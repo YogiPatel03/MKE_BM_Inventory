@@ -23,6 +23,11 @@ class TransactionStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+class CheckoutPurpose(str, Enum):
+    GENERAL = "GENERAL"
+    SABHA = "SABHA"
+
+
 class Transaction(Base):
     """
     The authoritative record of item movement. Every checkout and return
@@ -44,6 +49,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_transaction_qty_positive"),
+        CheckConstraint("purpose IN ('GENERAL', 'SABHA')", name="ck_transaction_purpose_valid"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -66,6 +72,10 @@ class Transaction(Base):
     )
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     returned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    purpose: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=CheckoutPurpose.GENERAL, server_default="GENERAL"
+    )
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     photo_requested_via_telegram: Mapped[bool] = mapped_column(

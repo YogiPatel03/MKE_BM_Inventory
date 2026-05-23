@@ -37,6 +37,7 @@ async def checkout_bin_endpoint(
         processed_by_user_id=current_user.id,
         due_at=body.due_at,
         notes=body.notes,
+        purpose=body.purpose,
     )
 
     # Auto-create return task on the user's group checklist

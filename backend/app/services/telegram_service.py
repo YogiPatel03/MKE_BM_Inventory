@@ -22,11 +22,12 @@ from telegram import Bot
 from telegram.error import TelegramError
 
 from app.config import settings
+from app.models.checklist import GroupName, sabha_date_for_week
 from app.models.transaction import Transaction
 
 if TYPE_CHECKING:
     from app.models.bin_transaction import BinTransaction
-    from app.models.checklist import ChecklistItem
+    from app.models.checklist import Checklist, ChecklistItem
     from app.models.user import User
 
 log = logging.getLogger(__name__)
@@ -400,6 +401,55 @@ async def notify_checklist_return_proof(task: "ChecklistItem", completer: "User"
         f"📷 {user_display}, please reply to this message with a photo confirming the return."
     )
     await _send(settings.telegram_coordinator_chat_id, text)
+
+
+async def notify_checklist_item_status_changed(
+    task: "ChecklistItem",
+    checklist: "Checklist",
+    actor: "User",
+    new_status: str,
+) -> None:
+    """
+    Send a group-topic notification when a checklist item is manually marked
+    completed or incomplete. new_status must be "completed" or "incomplete".
+    Fire-and-forget: never raises.
+    """
+    try:
+        group_display = html.escape(
+            GroupName.DISPLAY.get(checklist.group_name, checklist.group_name)
+        )
+        sabha_date = sabha_date_for_week(checklist.week_start)
+        sabha_str = sabha_date.strftime("%b %d, %Y")
+
+        tg_handle = getattr(actor, "telegram_handle", None)
+        full_name = getattr(actor, "full_name", None) or getattr(actor, "username", "Unknown")
+        actor_display = html.escape(f"@{tg_handle}" if tg_handle else full_name)
+
+        task_title = html.escape(task.title)
+
+        if new_status == "completed":
+            status_line = "✅ <b>Checklist task completed</b>"
+        else:
+            status_line = "↩️ <b>Checklist task marked incomplete</b>"
+
+        text = (
+            f"{status_line}\n"
+            f"Group: <b>{group_display}</b> — Sabha: {sabha_str}\n"
+            f"Task: {task_title}\n"
+            f"By: {actor_display}"
+        )
+
+        notes = getattr(task, "completion_notes", None)
+        if new_status == "completed" and notes:
+            text += f"\nNotes: {html.escape(notes)}"
+
+        await send_to_group_topic(checklist.group_name, text)
+    except Exception:
+        log.exception(
+            "notify_checklist_item_status_changed failed for item_id=%s status=%s",
+            getattr(task, "id", "?"),
+            new_status,
+        )
 
 
 async def notify_out_of_stock(item_name: str, location: str) -> None:

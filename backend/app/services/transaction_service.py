@@ -20,7 +20,7 @@ from app.models.activity_log import ActivityType
 from app.models.bin import Bin
 from app.models.bin_transaction import BinTransaction, BinTransactionStatus
 from app.models.item import Item
-from app.models.transaction import Transaction, TransactionStatus
+from app.models.transaction import CheckoutPurpose, Transaction, TransactionStatus
 from app.models.user import User
 from app.services.activity_service import log_activity
 
@@ -37,6 +37,7 @@ async def checkout_item(
     due_at: Optional[datetime],
     notes: Optional[str],
     bypass_requires_request: bool = False,
+    purpose: str = CheckoutPurpose.GENERAL,
 ) -> Transaction:
     """
     Creates a CHECKED_OUT transaction and decrements Item.quantity_available.
@@ -108,6 +109,7 @@ async def checkout_item(
         status=TransactionStatus.CHECKED_OUT,
         due_at=due_at,
         notes=notes,
+        purpose=purpose,
     )
     db.add(transaction)
     await db.flush()  # get transaction.id without committing

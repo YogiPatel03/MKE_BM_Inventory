@@ -4,10 +4,11 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.models.transaction import CheckoutPurpose
 
 if TYPE_CHECKING:
     from app.models.bin import Bin
@@ -33,6 +34,9 @@ class BinTransaction(Base):
     """
 
     __tablename__ = "bin_transactions"
+    __table_args__ = (
+        CheckConstraint("purpose IN ('GENERAL', 'SABHA')", name="ck_bin_transaction_purpose_valid"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     bin_id: Mapped[int] = mapped_column(ForeignKey("bins.id"), nullable=False, index=True)
@@ -50,6 +54,10 @@ class BinTransaction(Base):
     )
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     returned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    purpose: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=CheckoutPurpose.GENERAL, server_default="GENERAL"
+    )
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

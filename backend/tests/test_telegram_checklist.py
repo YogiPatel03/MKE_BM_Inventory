@@ -618,13 +618,14 @@ async def test_undo_updates_db(db):
 
 
 @pytest.mark.asyncio
-async def test_undo_own_completion_allowed(db):
-    """A regular user can undo a task they themselves completed."""
+async def test_undo_allowed_for_assigned_user(db):
+    """A regular user currently assigned to the checklist can undo a task they completed."""
     user_role = _user_role()
     db.add(user_role)
     await db.flush()
     user = await _seed_user(db, telegram_chat_id="111", role=user_role, group_name=GroupName.GROUP_1)
     cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _assign_user_to_checklist(db, cl, user, user)
     task = await _seed_task(db, cl, title="Vacuum", is_completed=True, completed_by_id=user.id)
     await db.commit()
 
@@ -634,6 +635,38 @@ async def test_undo_own_completion_allowed(db):
 
     await db.refresh(task)
     assert task.is_completed is False
+
+
+@pytest.mark.asyncio
+async def test_undo_blocked_for_former_assignee(db):
+    """A user removed from checklist assignments cannot /undo even if they were the completer."""
+    user_role = _user_role()
+    coord_role = _coord_role()
+    db.add(user_role)
+    db.add(coord_role)
+    await db.flush()
+    coord = await _seed_user(db, role=coord_role, group_name=GroupName.GROUP_1, username="coord_fua")
+    user = await _seed_user(
+        db, telegram_chat_id="444", role=user_role, group_name=GroupName.GROUP_1, username="user_fua"
+    )
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    assignment = await _assign_user_to_checklist(db, cl, user, coord)
+    task = await _seed_task(db, cl, title="Former assignee task", is_completed=True, completed_by_id=user.id)
+    await db.flush()
+    # Remove the assignment — simulates unassignment after a one-week override
+    await db.delete(assignment)
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_private_update(444, "user_fua", f"/undo {task.id}"), db)
+
+    await db.refresh(task)
+    assert task.is_completed is True  # must remain completed
+    text = _all_sent_text(bot)
+    assert "↩️" not in text
+    assert "marked incomplete" not in text.lower()
+    assert "❌" in text or "permission" in text.lower()
 
 
 @pytest.mark.asyncio
@@ -655,6 +688,254 @@ async def test_undo_blocked_for_auto_return_task(db):
     assert task.is_completed is True  # unchanged
     text = _all_sent_text(bot)
     assert "auto" in text.lower() or "return" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_done_blocked_for_cross_group_assigned_user(db):
+    """A GROUP_2 user explicitly assigned to a GROUP_1 checklist cannot /done a GROUP_1 item."""
+    coord_role = _coord_role()
+    user_role = _user_role()
+    db.add(coord_role)
+    db.add(user_role)
+    await db.flush()
+    coord = await _seed_user(db, role=coord_role, group_name=GroupName.GROUP_1, username="coord_xgd")
+    cross_user = await _seed_user(
+        db, telegram_chat_id="222", role=user_role, group_name=GroupName.GROUP_2, username="user_xgd2"
+    )
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _assign_user_to_checklist(db, cl, cross_user, coord)
+    task = await _seed_task(db, cl, title="Group 1 done-blocked item")
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_private_update(222, "user_xgd2", f"/done {task.id}"), db)
+
+    await db.refresh(task)
+    assert task.is_completed is False
+    text = _all_sent_text(bot).lower()
+    assert "marked complete" not in text
+    assert "❌" in _all_sent_text(bot) or "group" in text or "assigned" in text
+
+
+@pytest.mark.asyncio
+async def test_undo_blocked_for_cross_group_own_completion(db):
+    """A GROUP_2 user cannot /undo a GROUP_1 item even if they are recorded as the completer."""
+    coord_role = _coord_role()
+    user_role = _user_role()
+    db.add(coord_role)
+    db.add(user_role)
+    await db.flush()
+    coord = await _seed_user(db, role=coord_role, group_name=GroupName.GROUP_1, username="coord_xgu")
+    cross_user = await _seed_user(
+        db, telegram_chat_id="333", role=user_role, group_name=GroupName.GROUP_2, username="user_xgu3"
+    )
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _assign_user_to_checklist(db, cl, cross_user, coord)
+    # Simulate task completed by the cross-group user (e.g., via a pre-fix /done)
+    task = await _seed_task(
+        db, cl, title="Group 1 undo-blocked item", is_completed=True, completed_by_id=cross_user.id
+    )
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot):
+        await handle_update(_private_update(333, "user_xgu3", f"/undo {task.id}"), db)
+
+    await db.refresh(task)
+    assert task.is_completed is True  # must remain completed
+    text = _all_sent_text(bot).lower()
+    assert "marked incomplete" not in text
+    assert "↩️" not in _all_sent_text(bot)
+    assert "❌" in _all_sent_text(bot) or "permission" in text
+
+
+# ─── /done and /undo status-change notifications ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_done_real_transition_sends_status_notification(db):
+    """/done on a real transition calls notify_checklist_item_status_changed once with 'completed'."""
+    coord_role = _coord_role()
+    db.add(coord_role)
+    await db.flush()
+    coord = await _seed_user(db, telegram_chat_id="777", role=coord_role, group_name=GroupName.GROUP_1)
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _assign_user_to_checklist(db, cl, coord, coord)
+    task = await _seed_task(db, cl, title="Chairs out")
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.bot.handlers.notify_checklist_item_status_changed", new_callable=AsyncMock) as mock_notify:
+        await handle_update(_private_update(777, "coord", f"/done {task.id}"), db)
+
+    mock_notify.assert_called_once()
+    _task_arg, _cl_arg, _actor_arg, status_arg = mock_notify.call_args.args
+    assert status_arg == "completed"
+    assert _task_arg.id == task.id
+    assert _actor_arg.id == coord.id
+
+
+@pytest.mark.asyncio
+async def test_done_noop_does_not_send_status_notification(db):
+    """/done on an already-complete task does not call notify."""
+    coord_role = _coord_role()
+    db.add(coord_role)
+    await db.flush()
+    coord = await _seed_user(db, telegram_chat_id="777", role=coord_role, group_name=GroupName.GROUP_1)
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _assign_user_to_checklist(db, cl, coord, coord)
+    task = await _seed_task(db, cl, title="Already done", is_completed=True, completed_by_id=coord.id)
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.bot.handlers.notify_checklist_item_status_changed", new_callable=AsyncMock) as mock_notify:
+        await handle_update(_private_update(777, "coord", f"/done {task.id}"), db)
+
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_undo_real_transition_sends_status_notification(db):
+    """/undo on a real transition calls notify_checklist_item_status_changed once with 'incomplete'."""
+    coord_role = _coord_role()
+    db.add(coord_role)
+    await db.flush()
+    coord = await _seed_user(db, telegram_chat_id="777", role=coord_role, group_name=GroupName.GROUP_1)
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _assign_user_to_checklist(db, cl, coord, coord)
+    task = await _seed_task(db, cl, title="Chairs out", is_completed=True, completed_by_id=coord.id)
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.bot.handlers.notify_checklist_item_status_changed", new_callable=AsyncMock) as mock_notify:
+        await handle_update(_private_update(777, "coord", f"/undo {task.id}"), db)
+
+    mock_notify.assert_called_once()
+    _task_arg, _cl_arg, _actor_arg, status_arg = mock_notify.call_args.args
+    assert status_arg == "incomplete"
+    assert _task_arg.id == task.id
+    assert _actor_arg.id == coord.id
+
+
+@pytest.mark.asyncio
+async def test_undo_noop_does_not_send_status_notification(db):
+    """/undo on an already-incomplete task does not call notify."""
+    coord_role = _coord_role()
+    db.add(coord_role)
+    await db.flush()
+    coord = await _seed_user(db, telegram_chat_id="777", role=coord_role, group_name=GroupName.GROUP_1)
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _assign_user_to_checklist(db, cl, coord, coord)
+    task = await _seed_task(db, cl, title="Not done yet", is_completed=False)
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.bot.handlers.notify_checklist_item_status_changed", new_callable=AsyncMock) as mock_notify:
+        await handle_update(_private_update(777, "coord", f"/undo {task.id}"), db)
+
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_done_notification_failure_does_not_rollback_db(db):
+    """Notification failure on /done does not roll back the DB completion."""
+    coord_role = _coord_role()
+    db.add(coord_role)
+    await db.flush()
+    coord = await _seed_user(db, telegram_chat_id="777", role=coord_role, group_name=GroupName.GROUP_1)
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _assign_user_to_checklist(db, cl, coord, coord)
+    task = await _seed_task(db, cl, title="Chairs out")
+    await db.commit()
+
+    async def _raise(*args, **kwargs):
+        raise RuntimeError("Telegram down")
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.bot.handlers.notify_checklist_item_status_changed", side_effect=_raise):
+        await handle_update(_private_update(777, "coord", f"/done {task.id}"), db)
+
+    await db.refresh(task)
+    assert task.is_completed is True
+
+
+@pytest.mark.asyncio
+async def test_undo_notification_failure_does_not_rollback_db(db):
+    """Notification failure on /undo does not roll back the DB incompletion."""
+    coord_role = _coord_role()
+    db.add(coord_role)
+    await db.flush()
+    coord = await _seed_user(db, telegram_chat_id="777", role=coord_role, group_name=GroupName.GROUP_1)
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    await _assign_user_to_checklist(db, cl, coord, coord)
+    task = await _seed_task(db, cl, title="Chairs out", is_completed=True, completed_by_id=coord.id)
+    await db.commit()
+
+    async def _raise(*args, **kwargs):
+        raise RuntimeError("Telegram down")
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.bot.handlers.notify_checklist_item_status_changed", side_effect=_raise):
+        await handle_update(_private_update(777, "coord", f"/undo {task.id}"), db)
+
+    await db.refresh(task)
+    assert task.is_completed is False
+
+
+@pytest.mark.asyncio
+async def test_blocked_done_does_not_send_status_notification(db):
+    """A blocked /done (unassigned user) does not call notify."""
+    user_role = _user_role()
+    db.add(user_role)
+    await db.flush()
+    user = await _seed_user(db, telegram_chat_id="111", role=user_role, group_name=GroupName.GROUP_1)
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    task = await _seed_task(db, cl, title="Not assigned task")
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.bot.handlers.notify_checklist_item_status_changed", new_callable=AsyncMock) as mock_notify:
+        await handle_update(_private_update(111, "user1", f"/done {task.id}"), db)
+
+    mock_notify.assert_not_called()
+    await db.refresh(task)
+    assert task.is_completed is False
+
+
+@pytest.mark.asyncio
+async def test_blocked_undo_does_not_send_status_notification(db):
+    """A blocked /undo (former assignee removed) does not call notify."""
+    user_role = _user_role()
+    coord_role = _coord_role()
+    db.add(user_role)
+    db.add(coord_role)
+    await db.flush()
+    coord = await _seed_user(db, role=coord_role, group_name=GroupName.GROUP_1, username="coord_bundo")
+    user = await _seed_user(
+        db, telegram_chat_id="444", role=user_role, group_name=GroupName.GROUP_1, username="user_bundo"
+    )
+    cl = await _seed_checklist(db, GroupName.GROUP_1)
+    assignment = await _assign_user_to_checklist(db, cl, user, coord)
+    task = await _seed_task(db, cl, title="Former task", is_completed=True, completed_by_id=user.id)
+    await db.flush()
+    await db.delete(assignment)
+    await db.commit()
+
+    bot = _mock_bot()
+    with patch("app.bot.handlers.get_bot", return_value=bot), \
+         patch("app.bot.handlers.notify_checklist_item_status_changed", new_callable=AsyncMock) as mock_notify:
+        await handle_update(_private_update(444, "user_bundo", f"/undo {task.id}"), db)
+
+    mock_notify.assert_not_called()
+    await db.refresh(task)
+    assert task.is_completed is True
 
 
 # ─── /claim command ───────────────────────────────────────────────────────────

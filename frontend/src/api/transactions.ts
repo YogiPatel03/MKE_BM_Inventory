@@ -1,5 +1,5 @@
 import { apiClient } from "./client";
-import type { CheckoutRequest, ReturnRequest, Transaction, TransactionDetail } from "@/types";
+import type { CheckoutPurpose, CheckoutRequest, ReturnRequest, Transaction, TransactionDetail } from "@/types";
 
 export async function listTransactions(params: {
   status_filter?: string;
@@ -18,12 +18,14 @@ export async function getTransaction(id: number): Promise<TransactionDetail> {
 }
 
 export async function checkout(payload: CheckoutRequest): Promise<Transaction> {
+  const purpose: CheckoutPurpose = payload.purpose ?? "GENERAL";
   const { data } = await apiClient.post<Transaction>("/transactions/checkout", {
     item_id: payload.itemId,
     user_id: payload.userId,
     quantity: payload.quantity,
     due_at: payload.dueAt,
     notes: payload.notes,
+    purpose,
   });
   return data;
 }
