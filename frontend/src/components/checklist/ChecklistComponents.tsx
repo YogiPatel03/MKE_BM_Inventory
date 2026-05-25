@@ -6,6 +6,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   Folder,
+  Pencil,
   Plus,
   Trash2,
   UserPlus,
@@ -16,6 +17,7 @@ import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import {
   getChecklist,
   addChecklistItem,
+  updateChecklistItem,
   completeChecklistItem,
   incompleteChecklistItem,
   deleteChecklistItem,
@@ -322,6 +324,123 @@ function CompleteModal({
   );
 }
 
+// ── Edit Item Modal ───────────────────────────────────────────────────────────
+
+function EditItemModal({
+  item,
+  checklistId,
+  assignees,
+  onClose,
+}: {
+  item: ChecklistItem;
+  checklistId: number;
+  assignees: { id: number; fullName: string }[];
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [title, setTitle] = useState(item.title);
+  const [description, setDescription] = useState(item.description ?? "");
+  // Use "" to represent "Everyone" (null assignee) so the <select> value is always a string
+  const [assigneeId, setAssigneeId] = useState<number | "">(item.assigneeId ?? "");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) return;
+    setLoading(true);
+    setError("");
+    try {
+      await updateChecklistItem(checklistId, item.id, {
+        title: trimmedTitle,
+        // Always send description so an empty field clears a previous value
+        description: description.trim(),
+        // null means "Everyone" — the backend will clear the existing assignee
+        assigneeId: assigneeId === "" ? null : Number(assigneeId),
+      });
+      invalidateChecklist(qc, checklistId);
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? "Failed to update task");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
+      <div className="card w-full max-w-md p-6 relative">
+        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-700">
+          <X className="h-5 w-5" />
+        </button>
+        <h2 className="text-lg font-semibold text-slate-900 mb-5">Edit Task</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">Task Title *</label>
+            <input
+              className="input"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="label">Description</label>
+            <textarea
+              className="input resize-none"
+              rows={2}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Optional details"
+            />
+          </div>
+          <div>
+            <label className="label">Assign to</label>
+            <select
+              className="input"
+              value={assigneeId}
+              onChange={(e) =>
+                setAssigneeId(e.target.value === "" ? "" : Number(e.target.value))
+              }
+            >
+              <option value="">Everyone</option>
+              {assignees.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.fullName}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-slate-500 mt-1">
+              Leave blank to assign to everyone — one completion counts.
+            </p>
+          </div>
+          {error && (
+            <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
+          )}
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn-secondary flex-1 justify-center"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading || !title.trim()}
+              className="btn-primary flex-1 justify-center"
+            >
+              {loading ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ── Assign User Modal (This week + Every week tabs) ───────────────────────────
 
 function AssignModal({
@@ -574,15 +693,19 @@ function TaskRow({
   checklistId,
   canComplete,
   canDelete,
+  canEdit,
   onComplete,
   onDelete,
+  onEdit,
 }: {
   item: ChecklistItem;
   checklistId: number;
   canComplete: boolean;
   canDelete: boolean;
+  canEdit: boolean;
   onComplete: (item: ChecklistItem) => void;
   onDelete: (itemId: number) => void;
+  onEdit: (item: ChecklistItem) => void;
 }) {
   const qc = useQueryClient();
   const [incompleteLoading, setIncompleteLoading] = useState(false);
@@ -659,6 +782,15 @@ function TaskRow({
             {incompleteLoading ? "…" : "Undo"}
           </button>
         )}
+        {!item.isAutoGenerated && canEdit && (
+          <button
+            onClick={() => onEdit(item)}
+            aria-label={`Edit task: ${item.title}`}
+            className="p-2 text-slate-300 hover:text-blue-500 rounded transition-colors"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
         {!item.isAutoGenerated && canDelete && (
           <button
             onClick={() => onDelete(item.id)}
@@ -680,15 +812,19 @@ function SubchecklistSection({
   checklistId,
   canComplete,
   canDelete,
+  canEdit,
   onComplete,
   onDelete,
+  onEdit,
 }: {
   sub: Subchecklist;
   checklistId: number;
   canComplete: boolean;
   canDelete: boolean;
+  canEdit: boolean;
   onComplete: (item: ChecklistItem) => void;
   onDelete: (itemId: number) => void;
+  onEdit: (item: ChecklistItem) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const completed = sub.items.filter((i) => i.isCompleted).length;
@@ -737,8 +873,10 @@ function SubchecklistSection({
                 checklistId={checklistId}
                 canComplete={canComplete}
                 canDelete={canDelete}
+                canEdit={canEdit}
                 onComplete={onComplete}
                 onDelete={onDelete}
+                onEdit={onEdit}
               />
             ))
           )}
@@ -760,6 +898,7 @@ export function ChecklistDetailView({ checklistId }: { checklistId: number }) {
   const [addItemOpen, setAddItemOpen] = useState(false);
   const [addSubOpen, setAddSubOpen] = useState(false);
   const [completingItem, setCompletingItem] = useState<ChecklistItem | null>(null);
+  const [editingItem, setEditingItem] = useState<ChecklistItem | null>(null);
   const [assignOpen, setAssignOpen] = useState(false);
   const [deletingItemId, setDeletingItemId] = useState<number | null>(null);
 
@@ -784,6 +923,8 @@ export function ChecklistDetailView({ checklistId }: { checklistId: number }) {
   const isAssigned = checklist.assignments.some((a) => a.userId === user?.id);
   const canComplete = isAssigned || canManage;
   const canDelete = canManage || (!!user?.role.canApproveRequests && isAssigned);
+  // Edit permission mirrors delete: admins/coordinators + assigned group leads
+  const canEdit = canDelete;
 
   const completedCount = checklist.items.filter((i) => i.isCompleted).length;
   const topLevelItems = checklist.items.filter((i) => i.subchecklistId === null);
@@ -831,8 +972,10 @@ export function ChecklistDetailView({ checklistId }: { checklistId: number }) {
               checklistId={checklistId}
               canComplete={canComplete}
               canDelete={canDelete}
+              canEdit={canEdit}
               onComplete={setCompletingItem}
               onDelete={setDeletingItemId}
+              onEdit={setEditingItem}
             />
           ))}
         </div>
@@ -850,8 +993,10 @@ export function ChecklistDetailView({ checklistId }: { checklistId: number }) {
               checklistId={checklistId}
               canComplete={canComplete}
               canDelete={canDelete}
+              canEdit={canEdit}
               onComplete={setCompletingItem}
               onDelete={setDeletingItemId}
+              onEdit={setEditingItem}
             />
           ))}
         </div>
@@ -880,6 +1025,14 @@ export function ChecklistDetailView({ checklistId }: { checklistId: number }) {
           item={completingItem}
           checklistId={checklistId}
           onClose={() => setCompletingItem(null)}
+        />
+      )}
+      {editingItem && (
+        <EditItemModal
+          item={editingItem}
+          checklistId={checklistId}
+          assignees={assignees}
+          onClose={() => setEditingItem(null)}
         />
       )}
       {assignOpen && checklist && (

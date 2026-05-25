@@ -379,14 +379,17 @@ async def update_checklist_item(
         task.title = body.title
     if body.description is not None:
         task.description = body.description
-    if body.assignee_id is not None:
-        # Validate assignee is on this checklist (admins bypass)
-        if not _can_manage(current_user):
-            if not _is_assigned(checklist, body.assignee_id):
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    "Assignee must be assigned to this checklist"
-                )
+    # Use model_fields_set to distinguish "field not sent" from "explicitly sent as null"
+    # so callers can clear the assignee back to "Everyone" by sending assignee_id: null.
+    if "assignee_id" in body.model_fields_set:
+        if body.assignee_id is not None:
+            # Validate assignee is on this checklist (admins bypass)
+            if not _can_manage(current_user):
+                if not _is_assigned(checklist, body.assignee_id):
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        "Assignee must be assigned to this checklist"
+                    )
         task.assignee_id = body.assignee_id
 
     await db.commit()
