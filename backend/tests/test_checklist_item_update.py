@@ -219,6 +219,57 @@ async def test_explicit_null_assignee_clears_to_everyone(db: AsyncSession, clien
 
 
 @pytest.mark.asyncio
+async def test_patch_assignee_to_valid_assigned_user(db: AsyncSession, client_as):
+    """PATCH normal task with assignee_id set to a valid assigned user → 200.
+    Response includes correct assignee_id, assignee.full_name, and assignee.username."""
+    admin_role = await _seed_role(db, _admin_role())
+    admin = await _seed_user(db, role=admin_role, username="admin_asgn1", group_name=GroupName.GROUP_1)
+
+    # A second user who is assigned to the checklist
+    from app.models.role import Role as _Role
+    member_role = _Role(
+        name="USER",
+        can_manage_inventory=False,
+        can_manage_cabinets=False,
+        can_manage_bins=False,
+        can_manage_users=False,
+        can_process_any_transaction=False,
+        can_view_all_transactions=False,
+        can_view_audit_logs=False,
+        can_approve_requests=False,
+    )
+    db.add(member_role)
+    await db.flush()
+    member = User(
+        full_name="Jane Member",
+        username="jane_member",
+        password_hash=hash_password("pass"),
+        role_id=member_role.id,
+        group_name=GroupName.GROUP_1,
+    )
+    db.add(member)
+    await db.flush()
+
+    ws = date(2026, 5, 4)
+    cl = await _seed_checklist(db, group_name=GroupName.GROUP_1, week_start=ws)
+    await _assign(db, cl, admin, admin)
+    await _assign(db, cl, member, admin)  # member is assigned to the checklist
+    task = await _seed_task(db, cl, title="Unassigned task")  # starts as Everyone
+    await db.commit()
+
+    async with client_as(admin) as c:
+        resp = await c.patch(
+            f"/api/checklists/{cl.id}/items/{task.id}",
+            json={"assignee_id": member.id},
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["assignee_id"] == member.id
+    assert data["assignee"]["full_name"] == "Jane Member"
+    assert data["assignee"]["username"] == "jane_member"
+
+
+@pytest.mark.asyncio
 async def test_item_return_task_cannot_be_edited(db: AsyncSession, client_as):
     """An auto-generated ITEM_RETURN task is rejected with 409 Conflict."""
     admin_role = await _seed_role(db, _admin_role())
