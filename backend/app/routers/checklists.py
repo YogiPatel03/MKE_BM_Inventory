@@ -375,6 +375,16 @@ async def update_checklist_item(
     if not task:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checklist item not found")
 
+    # Auto-generated return tasks auto-complete when the physical return is processed;
+    # editing them via the API would create inconsistent state.
+    # NOTE: this intentionally does NOT block normal weekly Pre/Post-Sabha tasks —
+    # those have is_auto_generated=False. Only ITEM_RETURN/BIN_RETURN rows are locked.
+    if task.is_auto_generated and task.auto_type in ("ITEM_RETURN", "BIN_RETURN"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Auto-generated return tasks cannot be edited. They auto-complete on return.",
+        )
+
     if body.title is not None:
         task.title = body.title
     if body.description is not None:
@@ -393,7 +403,8 @@ async def update_checklist_item(
         task.assignee_id = body.assignee_id
 
     await db.commit()
-    await db.refresh(task, ["assignee"])
+    # Full refresh so server-side columns (updated_at, assignee FK) are all current.
+    await db.refresh(task)
     return task
 
 
