@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Flame, X } from "lucide-react";
 import { markAsUsed } from "@/api/usage";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
+import { isMarkAsUsedQtyValid, parseMarkAsUsedQtyInput } from "@/utils/markAsUsedValidation";
 import type { Item } from "@/types";
 
 interface Props {
@@ -20,7 +21,7 @@ export function MarkAsUsedModal({ item, onClose }: Props) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (qty <= 0 || qty > item.quantityAvailable) return;
+    if (!isMarkAsUsedQtyValid(qty, item.quantityAvailable)) return;
     setIsLoading(true);
     setError("");
     try {
@@ -73,7 +74,7 @@ export function MarkAsUsedModal({ item, onClose }: Props) {
               step={0.01}
               className="input"
               value={qty}
-              onChange={(e) => setQty(parseFloat(e.target.value) || 0)}
+              onChange={(e) => setQty(parseMarkAsUsedQtyInput(e.target.value))}
               required
               autoFocus
             />
@@ -96,7 +97,7 @@ export function MarkAsUsedModal({ item, onClose }: Props) {
             </button>
             <button
               type="submit"
-              disabled={isLoading || qty < 1 || qty > item.quantityAvailable}
+              disabled={isLoading || !isMarkAsUsedQtyValid(qty, item.quantityAvailable)}
               className="btn-primary flex-1 justify-center bg-amber-600 hover:bg-amber-700"
             >
               {isLoading ? "Saving…" : `Use ${qty}`}

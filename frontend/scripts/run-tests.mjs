@@ -34,6 +34,8 @@ function test(name, fn) {
 }
 
 const itemPayloads = await importTs("src/api/itemPayloads.ts");
+const markAsUsedValidation = await importTs("src/utils/markAsUsedValidation.ts");
+const { isMarkAsUsedQtyValid, parseMarkAsUsedQtyInput, toUsageEventPayload } = markAsUsedValidation;
 const checklistDateHelpers = await importTs("src/utils/checklistDateHelpers.ts");
 const { formatSabhaDate, parseLocalDate } = checklistDateHelpers;
 const typesSource = await read("src/types/index.ts");
@@ -43,6 +45,85 @@ const cabinetDetailSource = await read("src/pages/CabinetDetailPage.tsx");
 const inventoryListSource = await read("src/pages/InventoryListPage.tsx");
 const inventorySearchSource = await read("src/pages/InventoryPage.tsx");
 const clientSource = await read("src/api/client.ts");
+
+// ── Mark-as-used quantity validation (isMarkAsUsedQtyValid) ──────────────────
+
+test("isMarkAsUsedQtyValid: 0.2 of 3.79 available is valid (regression: fractional usage bug)", () => {
+  assert.equal(isMarkAsUsedQtyValid(0.2, 3.79), true);
+});
+
+test("isMarkAsUsedQtyValid: fractional qty less than 1 but > 0 is valid", () => {
+  assert.equal(isMarkAsUsedQtyValid(0.01, 5), true);
+  assert.equal(isMarkAsUsedQtyValid(0.5, 1), true);
+  assert.equal(isMarkAsUsedQtyValid(0.999, 1), true);
+});
+
+test("isMarkAsUsedQtyValid: consuming exactly the available quantity is valid", () => {
+  assert.equal(isMarkAsUsedQtyValid(3.79, 3.79), true);
+  assert.equal(isMarkAsUsedQtyValid(1, 1), true);
+});
+
+test("isMarkAsUsedQtyValid: 0 is invalid", () => {
+  assert.equal(isMarkAsUsedQtyValid(0, 3.79), false);
+});
+
+test("isMarkAsUsedQtyValid: negative quantities are invalid", () => {
+  assert.equal(isMarkAsUsedQtyValid(-1, 3.79), false);
+  assert.equal(isMarkAsUsedQtyValid(-0.001, 3.79), false);
+});
+
+test("isMarkAsUsedQtyValid: qty exceeding available stock is invalid", () => {
+  assert.equal(isMarkAsUsedQtyValid(3.80, 3.79), false);
+  assert.equal(isMarkAsUsedQtyValid(100, 3.79), false);
+  assert.equal(isMarkAsUsedQtyValid(4, 3.79), false);
+});
+
+// ── Mark-as-used input parsing (parseMarkAsUsedQtyInput) ─────────────────────
+
+test("parseMarkAsUsedQtyInput: decimal string preserves value", () => {
+  assert.equal(parseMarkAsUsedQtyInput("0.2"), 0.2);
+  assert.equal(parseMarkAsUsedQtyInput("3.79"), 3.79);
+});
+
+test("parseMarkAsUsedQtyInput: blank input coerces to 0, blocked by validator", () => {
+  const parsed = parseMarkAsUsedQtyInput("");
+  assert.equal(parsed, 0);
+  assert.equal(isMarkAsUsedQtyValid(parsed, 3.79), false);
+});
+
+test("parseMarkAsUsedQtyInput: non-numeric input coerces to 0, blocked by validator", () => {
+  const parsed = parseMarkAsUsedQtyInput("abc");
+  assert.equal(parsed, 0);
+  assert.equal(isMarkAsUsedQtyValid(parsed, 3.79), false);
+});
+
+test("parseMarkAsUsedQtyInput: negative string preserves sign, blocked by validator", () => {
+  const parsed = parseMarkAsUsedQtyInput("-1");
+  assert.equal(parsed, -1);
+  assert.equal(isMarkAsUsedQtyValid(parsed, 3.79), false);
+});
+
+// ── Usage event payload (toUsageEventPayload) ─────────────────────────────────
+
+test("toUsageEventPayload: decimal quantityUsed is preserved in quantity_used (no rounding)", () => {
+  const payload = toUsageEventPayload({ itemId: 42, quantityUsed: 0.2 });
+  assert.equal(payload.quantity_used, 0.2);
+});
+
+test("toUsageEventPayload: maps itemId to item_id", () => {
+  const payload = toUsageEventPayload({ itemId: 7, quantityUsed: 1 });
+  assert.equal(payload.item_id, 7);
+});
+
+test("toUsageEventPayload: notes included when provided", () => {
+  const payload = toUsageEventPayload({ itemId: 1, quantityUsed: 0.5, notes: "event setup" });
+  assert.equal(payload.notes, "event setup");
+});
+
+test("toUsageEventPayload: notes omitted when not provided", () => {
+  const payload = toUsageEventPayload({ itemId: 1, quantityUsed: 0.5 });
+  assert.equal(Object.hasOwn(payload, "notes"), false);
+});
 
 // ── formatSabhaDate / parseLocalDate ─────────────────────────────────────────
 
