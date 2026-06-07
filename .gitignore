@@ -44,3 +44,6 @@ logs/
 *.pem
 *.key
 secrets/
+
+# Generated import reports (never commit production data)
+reports/prod_*

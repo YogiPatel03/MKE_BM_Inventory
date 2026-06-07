@@ -45,11 +45,19 @@ export function RequestsPage() {
     queryFn: () => listRequests(statusFilter || undefined),
   });
 
+  function extractErrorMessage(err: unknown, fallback: string): string {
+    if (err && typeof err === "object" && "response" in err) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+      if (typeof detail === "string") return detail;
+    }
+    return err instanceof Error ? err.message : fallback;
+  }
+
   const approveMut = useMutation({
     mutationFn: (id: number) => approveRequest(id),
     onSuccess: () => setMutationError(null),
     onError: (err: unknown) => {
-      setMutationError(err instanceof Error ? err.message : "Approval failed. Please try again.");
+      setMutationError(extractErrorMessage(err, "Approval failed. Please try again."));
     },
     // Always refetch — keeps the list consistent even when the backend committed
     // but the response errored (e.g. post-commit notification failure → 500).
@@ -60,7 +68,7 @@ export function RequestsPage() {
     mutationFn: ({ id, reason }: { id: number; reason?: string }) => denyRequest(id, reason),
     onSuccess: () => setMutationError(null),
     onError: (err: unknown) => {
-      setMutationError(err instanceof Error ? err.message : "Denial failed. Please try again.");
+      setMutationError(extractErrorMessage(err, "Denial failed. Please try again."));
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ["requests"] }),
   });
@@ -69,7 +77,7 @@ export function RequestsPage() {
     mutationFn: (id: number) => cancelRequest(id),
     onSuccess: () => setMutationError(null),
     onError: (err: unknown) => {
-      setMutationError(err instanceof Error ? err.message : "Cancel failed. Please try again.");
+      setMutationError(extractErrorMessage(err, "Cancel failed. Please try again."));
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ["requests"] }),
   });
