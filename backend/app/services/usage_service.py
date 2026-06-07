@@ -63,9 +63,9 @@ async def mark_as_used(
     qty_before = item.quantity_available
     threshold = _effective_threshold(item)
 
-    # Consumables are permanently consumed
+    # Permanently reduce available stock; quantity_total tracks total on-hand
+    # and is not decremented so the display ratio (available/total) remains meaningful.
     item.quantity_available -= qty
-    item.quantity_total -= qty
 
     event = UsageEvent(
         item_id=item_id,
@@ -162,7 +162,6 @@ async def reverse_usage(
     threshold = _effective_threshold(item)
 
     item.quantity_available += original.quantity_used
-    item.quantity_total += original.quantity_used
 
     reversal = UsageEvent(
         item_id=original.item_id,

@@ -108,7 +108,32 @@ async def test_mark_consumable_as_used(client: AsyncClient, db: AsyncSession):
     # Verify stock reduced permanently
     item_r = (await client.get(f"/api/items/{consumable['id']}", headers=headers)).json()
     assert item_r["quantity_available"] == 90
-    assert item_r["quantity_total"] == 90  # total also reduces for consumables
+    assert item_r["quantity_total"] == 100  # total stays fixed; only available decreases
+
+
+@pytest.mark.asyncio
+async def test_decimal_usage_preserves_quantity_total(client: AsyncClient, db: AsyncSession):
+    """Regression: marking 0.20 as used from 3.79 should yield available=3.59, total=3.79.
+    Previously both fields decreased, giving the nonsensical display 3.59/3.59."""
+    await _seed_admin(db)
+    token = await _login(client, "admin", "adminpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Paint Cabinet", "room_id": room.id}, headers=headers)).json()
+    item = (await client.post(
+        "/api/items",
+        json={"name": "Green Paint", "quantity_total": 3.79, "cabinet_id": cab["id"], "sku": "PAINT1", "is_consumable": True},
+        headers=headers,
+    )).json()
+
+    r = await client.post("/api/usage-events", json={"item_id": item["id"], "quantity_used": 0.20}, headers=headers)
+    assert r.status_code == 201
+
+    item_r = (await client.get(f"/api/items/{item['id']}", headers=headers)).json()
+    assert abs(float(item_r["quantity_available"]) - 3.59) < 0.001
+    assert abs(float(item_r["quantity_total"]) - 3.79) < 0.001
 
 
 @pytest.mark.asyncio

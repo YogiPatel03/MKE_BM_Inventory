@@ -177,9 +177,10 @@ async def test_usage_reversal_restores_quantity(client: AsyncClient, db: AsyncSe
     assert r.status_code == 201
     event_id = r.json()["id"]
 
-    # Check quantity dropped
+    # Check quantity dropped; quantity_total must stay at 20 (not reduced by usage)
     item_r = await client.get(f"/api/items/{item_id}", headers=headers)
     assert item_r.json()["quantity_available"] == 15  # 20 - 5
+    assert item_r.json()["quantity_total"] == 20
 
     # Reverse the event
     rev_r = await client.post(f"/api/usage-events/{event_id}/reverse", json={}, headers=headers)
@@ -187,9 +188,10 @@ async def test_usage_reversal_restores_quantity(client: AsyncClient, db: AsyncSe
     assert rev_r.json()["is_reversal"] is True
     assert rev_r.json()["reverses_event_id"] == event_id
 
-    # Quantity should be restored
+    # Both available and total must be restored to original; total must not have been incremented
     item_r2 = await client.get(f"/api/items/{item_id}", headers=headers)
     assert item_r2.json()["quantity_available"] == 20
+    assert item_r2.json()["quantity_total"] == 20
 
     # Activity log should show reversal
     activity_r = await client.get("/api/activity", params={"activity_type": "USAGE_REVERSED"}, headers=headers)
@@ -289,6 +291,41 @@ async def test_low_stock_threshold_default_ten_percent(client: AsyncClient, db: 
     status2 = status_r2.json()
     low_ids2 = [i["item_id"] for i in status2["low_stock_items"]]
     assert item["id"] in low_ids2
+
+
+@pytest.mark.asyncio
+async def test_low_stock_threshold_stable_after_usage(client: AsyncClient, db: AsyncSession):
+    """Consuming 90 of 100 via usage must leave quantity_total=100 so the dynamic
+    threshold (max(1, 100//10)=10) still correctly flags 10 remaining as low stock.
+    Previously quantity_total also decreased, making threshold drop to 1 and hiding
+    the low-stock condition."""
+    _, _ = await _seed_admin(db)
+    token = await _login(client, "admin2", "adminpass2")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    room = Room(name="Test Room")
+    db.add(room)
+    await db.flush()
+    cab = (await client.post("/api/cabinets", json={"name": "Cab-Thresh-Usage", "room_id": room.id}, headers=headers)).json()
+    item = (await client.post(
+        "/api/items",
+        json={"name": "Staples", "quantity_total": 100, "cabinet_id": cab["id"], "sku": "STPL100", "is_consumable": True},
+        headers=headers,
+    )).json()
+    item_id = item["id"]
+
+    r = await client.post("/api/usage-events", json={"item_id": item_id, "quantity_used": 90}, headers=headers)
+    assert r.status_code == 201
+
+    item_r = (await client.get(f"/api/items/{item_id}", headers=headers)).json()
+    assert item_r["quantity_available"] == 10
+    assert item_r["quantity_total"] == 100  # must not have decreased with usage
+
+    # threshold = max(1, 100 // 10) = 10; 0 < 10 <= 10 → low stock
+    status_r = await client.get("/api/reports/inventory-status", headers=headers)
+    status = status_r.json()
+    low_ids = [i["item_id"] for i in status["low_stock_items"]]
+    assert item_id in low_ids
 
 
 @pytest.mark.asyncio
