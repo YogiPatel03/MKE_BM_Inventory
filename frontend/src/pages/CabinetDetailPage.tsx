@@ -100,10 +100,12 @@ function ItemRow({
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [markUsedOpen, setMarkUsedOpen] = useState(false);
 
+  const threshold = item.lowStockThreshold ?? Math.max(1, Math.floor(item.quantityTotal / 10));
+  const isLowStock = item.quantityAvailable > 0 && item.quantityAvailable <= threshold;
   const availColor =
     item.quantityAvailable === 0
       ? "badge-red"
-      : item.quantityAvailable < item.quantityTotal
+      : isLowStock || (!item.isConsumable && item.quantityAvailable < item.quantityTotal)
       ? "badge-yellow"
       : "badge-green";
   const mustRequest = item.requiresRequest && !canBypassRequiresRequest;

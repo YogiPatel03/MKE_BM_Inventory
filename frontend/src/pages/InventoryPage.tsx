@@ -258,7 +258,7 @@ export function InventoryPage() {
         const threshold = getLowStockThreshold(item);
         const isLowStock = item.quantityAvailable > 0 && item.quantityAvailable <= threshold;
         const isOutOfStock = item.quantityAvailable === 0;
-        const isCheckedOut = item.quantityAvailable < item.quantityTotal;
+        const isCheckedOut = !item.isConsumable && item.quantityAvailable < item.quantityTotal;
 
         // Status filter
         if (activeChip === "available" && item.quantityAvailable === 0) continue;
@@ -456,7 +456,7 @@ export function InventoryPage() {
             className="card p-4 text-left hover:shadow-md transition-shadow"
           >
             <p className="text-2xl font-bold text-brand-600">
-              {items.filter((i) => i.quantityAvailable < i.quantityTotal).length}
+              {items.filter((i) => !i.isConsumable && i.quantityAvailable < i.quantityTotal).length}
             </p>
             <p className="text-sm text-slate-600 mt-0.5">Items checked out</p>
           </button>
