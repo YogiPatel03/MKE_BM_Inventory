@@ -86,8 +86,9 @@ Telegram forum topics do **not** have their own chat IDs. A topic message uses t
    - `chat_id` — use this as `TELEGRAM_COORDINATOR_CHAT_ID`
    - `message_thread_id` — the thread ID for this specific topic (absent if not a topic)
    - `actor_telegram_id` — your personal Telegram ID
-4. Repeat step 2–3 for each group topic you want to map.
-5. Build the JSON mapping (see below) and set it in Render.
+4. To route coordinator alerts (checkouts, returns, requests, etc.) to a specific topic (e.g. "Inventory"), run `/whereami` inside that topic and copy its `message_thread_id` → set as `TELEGRAM_COORDINATOR_THREAD_ID`.
+5. Repeat step 2–3 for each group checklist topic you want to map.
+6. Build the JSON mapping (see below) and set `TELEGRAM_GROUP_TOPIC_THREAD_IDS` in Render.
 
 ### Environment Variables
 
@@ -96,7 +97,8 @@ Telegram forum topics do **not** have their own chat IDs. A topic message uses t
 | `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
 | `TELEGRAM_WEBHOOK_SECRET` | Random secret in the webhook URL |
 | `TELEGRAM_COORDINATOR_CHAT_ID` | Supergroup chat ID for coordinator alerts (e.g. `-100xxxxxxxxxx`) |
-| `TELEGRAM_GROUP_TOPIC_THREAD_IDS` | JSON mapping of group name → `message_thread_id` |
+| `TELEGRAM_COORDINATOR_THREAD_ID` | Optional `message_thread_id` for the coordinator "Inventory" topic. When set, all coordinator alerts (checkouts, returns, requests, low-stock, etc.) are posted into that forum topic instead of General. Get the value by running `/whereami` inside the Inventory topic. Leave blank to post to General. |
+| `TELEGRAM_GROUP_TOPIC_THREAD_IDS` | JSON mapping of group name → `message_thread_id` for group checklist topics (independent of `TELEGRAM_COORDINATOR_THREAD_ID`) |
 | `APP_TIMEZONE` | Timezone for display; Sunday scheduler jobs run at `America/Chicago` (hardcoded). |
 
 **TELEGRAM_GROUP_TOPIC_THREAD_IDS example:**

@@ -16,10 +16,11 @@ Topic routing:
 import html
 import json
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from telegram import Bot
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 
 from app.config import settings
 from app.models.checklist import GroupName, sabha_date_for_week
@@ -82,28 +83,112 @@ def get_group_for_thread_id(message_thread_id: int) -> Optional[str]:
 
 # ─── Low-level send ───────────────────────────────────────────────────────────
 
+@dataclass
+class _SendResult:
+    message_id: Optional[int]
+    error: Optional[Exception]
+
+
+# Lowercased substrings that identify a Telegram BadRequest as a rejected thread ID,
+# not a generic API error. Only these trigger the coordinator fallback.
+_INVALID_THREAD_PHRASES = (
+    "message thread not found",
+    "topic_closed",
+    "topic_deleted",
+)
+
+
+def _is_invalid_thread_error(error: Optional[Exception]) -> bool:
+    """Return True only for BadRequest errors whose message clearly indicates a bad thread ID."""
+    if not isinstance(error, BadRequest):
+        return False
+    msg = str(error).lower()
+    return any(phrase in msg for phrase in _INVALID_THREAD_PHRASES)
+
+
+async def _send_result(
+    chat_id: str, text: str, *, message_thread_id: Optional[int] = None
+) -> _SendResult:
+    """Perform the actual send; return a structured result. Never raises."""
+    if not chat_id:
+        return _SendResult(message_id=None, error=None)
+    try:
+        bot = get_bot()
+        if not bot:
+            return _SendResult(message_id=None, error=None)
+        kwargs: dict = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        if message_thread_id is not None:
+            kwargs["message_thread_id"] = message_thread_id
+        msg = await bot.send_message(**kwargs)
+        return _SendResult(message_id=msg.message_id, error=None)
+    except TelegramError as e:
+        log.warning("Telegram send failed to %s: %s", chat_id, e)
+        return _SendResult(message_id=None, error=e)
+    except Exception as e:
+        log.exception("Unexpected error in Telegram send to %s", chat_id)
+        return _SendResult(message_id=None, error=e)
+
+
 async def _send(chat_id: str, text: str, *, message_thread_id: Optional[int] = None) -> Optional[int]:
     """
     Send a message; return message_id or None on failure. Never raises.
     Pass message_thread_id to route into a forum topic.
     """
-    if not chat_id:
+    result = await _send_result(chat_id, text, message_thread_id=message_thread_id)
+    return result.message_id
+
+
+def _parse_coordinator_thread_id() -> Optional[int]:
+    """
+    Parse TELEGRAM_COORDINATOR_THREAD_ID from settings.
+    Returns None (and logs a warning) on invalid, empty, or non-positive value — never raises.
+    """
+    raw = str(settings.telegram_coordinator_thread_id or "").strip()
+    if not raw:
         return None
     try:
-        bot = get_bot()
-        if not bot:
-            return None
-        kwargs: dict = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-        if message_thread_id is not None:
-            kwargs["message_thread_id"] = message_thread_id
-        msg = await bot.send_message(**kwargs)
-        return msg.message_id
-    except TelegramError as e:
-        log.warning("Telegram send failed to %s: %s", chat_id, e)
+        thread_id = int(raw)
+    except (ValueError, TypeError):
+        log.warning(
+            "TELEGRAM_COORDINATOR_THREAD_ID is not a valid integer — coordinator alerts will post without a topic thread"
+        )
         return None
-    except Exception:
-        log.exception("Unexpected error in Telegram send to %s", chat_id)
+    if thread_id <= 0:
+        log.warning(
+            "TELEGRAM_COORDINATOR_THREAD_ID must be a positive integer (got %s) — coordinator alerts will post without a topic thread",
+            thread_id,
+        )
         return None
+    return thread_id
+
+
+async def send_to_coordinator(text: str) -> Optional[int]:
+    """
+    Send to the coordinator chat.  If TELEGRAM_COORDINATOR_THREAD_ID is set and
+    valid, routes into that forum topic; otherwise posts to General.
+    Only retries without message_thread_id when Telegram explicitly rejects the thread ID
+    (BadRequest with a known thread-rejection message). Ambiguous failures (NetworkError,
+    timeout, rate-limit, unexpected errors) do not trigger a fallback to avoid double-send.
+    Returns message_id or None. Never raises.
+    """
+    if not settings.telegram_coordinator_chat_id:
+        return None
+    thread_id = _parse_coordinator_thread_id()
+    if thread_id is not None:
+        result = await _send_result(
+            settings.telegram_coordinator_chat_id, text, message_thread_id=thread_id
+        )
+        if result.message_id is not None:
+            return result.message_id
+        if _is_invalid_thread_error(result.error):
+            log.warning(
+                "Coordinator thread send rejected (thread_id=%s, error=%s) — retrying without thread",
+                thread_id, result.error,
+            )
+            return await _send(settings.telegram_coordinator_chat_id, text)
+        # Ambiguous failure — do not retry; returning None avoids a duplicate in General.
+        return None
+    return await _send(settings.telegram_coordinator_chat_id, text)
 
 
 async def send_to_group_topic(group_name: str, text: str) -> Optional[int]:
@@ -177,7 +262,7 @@ async def notify_checkout(transaction: Transaction) -> None:
                 f"User: {user_display}\n"
                 f"Due: {due_str}"
             )
-            await _send(settings.telegram_coordinator_chat_id, coord_text)
+            await send_to_coordinator(coord_text)
 
         dm_text = (
             f"📦 <b>Checkout confirmed</b>\n"
@@ -211,7 +296,7 @@ async def notify_return_and_request_photo(transaction: Transaction) -> Optional[
                 f"📷 No photo was attached. {user_display}, please reply to this message "
                 f"with a condition/return photo for the record."
             )
-            message_id = await _send(settings.telegram_coordinator_chat_id, coord_text)
+            message_id = await send_to_coordinator(coord_text)
 
         # Borrower DM is fire-and-forget — must not gate returning the coordinator message_id.
         try:
@@ -256,7 +341,7 @@ async def notify_overdue(transaction: Transaction) -> None:
             f"User: {user_display}\n"
             f"Due: {due_str}"
         )
-        await _send(settings.telegram_coordinator_chat_id, coord_text)
+        await send_to_coordinator(coord_text)
 
 
 async def notify_bin_checkout(bin_txn: "BinTransaction") -> None:
@@ -276,7 +361,7 @@ async def notify_bin_checkout(bin_txn: "BinTransaction") -> None:
                 f"User: {user_display}\n"
                 f"Due: {due_str}"
             )
-            await _send(settings.telegram_coordinator_chat_id, coord_text)
+            await send_to_coordinator(coord_text)
 
         dm_text = (
             f"📦 <b>Bin checkout confirmed</b>\n"
@@ -302,7 +387,7 @@ async def notify_bin_return(bin_txn: "BinTransaction") -> None:
                 f"Bin: <b>{bin_label}</b>\n"
                 f"Returned by: {user_display}"
             )
-            await _send(settings.telegram_coordinator_chat_id, coord_text)
+            await send_to_coordinator(coord_text)
 
         dm_text = (
             f"✅ <b>Bin return recorded</b>\n"
@@ -334,7 +419,7 @@ async def notify_new_request(request_id: int, requester_name: str, target_name: 
         f"Item: <b>{html.escape(target_name)}</b>{reason_text}\n\n"
         f"/approve {request_id}  |  /deny {request_id}"
     )
-    message_id = await _send(settings.telegram_coordinator_chat_id, text)
+    message_id = await send_to_coordinator(text)
     return str(message_id) if message_id else None
 
 
@@ -349,7 +434,7 @@ async def notify_low_stock(item_name: str, quantity_available: int, threshold: i
         f"Location: {html.escape(location)}\n\n"
         f"Consider restocking soon."
     )
-    await _send(settings.telegram_coordinator_chat_id, text)
+    await send_to_coordinator(text)
 
 
 async def notify_request_submitted(requester_chat_id: str, item_name: str, request_id: int) -> None:
@@ -400,7 +485,7 @@ async def notify_checklist_return_proof(task: "ChecklistItem", completer: "User"
         f"Completed by: {user_display}\n\n"
         f"📷 {user_display}, please reply to this message with a photo confirming the return."
     )
-    await _send(settings.telegram_coordinator_chat_id, text)
+    await send_to_coordinator(text)
 
 
 async def notify_checklist_item_status_changed(
@@ -462,7 +547,7 @@ async def notify_out_of_stock(item_name: str, location: str) -> None:
         f"Location: {html.escape(location)}\n\n"
         f"Item has been moved to Restock Me. Restock to restore."
     )
-    await _send(settings.telegram_coordinator_chat_id, text)
+    await send_to_coordinator(text)
 
 
 async def notify_purchase_and_request_receipt(
@@ -490,7 +575,7 @@ async def notify_purchase_and_request_receipt(
 
     message_id: Optional[int] = None
     if settings.telegram_coordinator_chat_id:
-        message_id = await _send(settings.telegram_coordinator_chat_id, group_text)
+        message_id = await send_to_coordinator(group_text)
 
     # DM the purchaser so they don't miss the receipt request
     if purchaser_chat_id:

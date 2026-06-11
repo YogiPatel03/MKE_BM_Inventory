@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
     telegram_coordinator_chat_id: str = ""
+    # Optional forum topic thread ID for coordinator alerts (use /whereami inside the Inventory topic)
+    telegram_coordinator_thread_id: str = ""
     # JSON mapping of group name → message_thread_id, e.g. {"SHISHU_MANDAL":12,"GROUP_1":34}
     telegram_group_topic_thread_ids: str = ""
 
